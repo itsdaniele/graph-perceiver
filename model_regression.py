@@ -19,25 +19,25 @@ from torchmetrics.functional import accuracy
 # helpers
 
 
-class PerceiverClassifier(pl.LightningModule):
+class PerceiverRegressor(pl.LightningModule):
     def __init__(
         self,
         input_channels=3,
         input_axis=2,
         num_freq_bands=6,
         max_freq=10.0,
-        depth=4,
-        num_latents=64,
+        depth=5,
+        num_latents=32,
         latent_dim=64,
         cross_heads=1,
         latent_heads=8,
         cross_dim_head=64,
         latent_dim_head=64,
-        num_classes=1000,
+        num_classes=1,
         attn_dropout=0.0,
         ff_dropout=0.0,
         weight_tie_layers=False,
-        fourier_encode_data=True,
+        fourier_encode_data=False,
         self_per_cross_attn=2,
     ):
         super().__init__()
@@ -68,9 +68,9 @@ class PerceiverClassifier(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         x, y = batch
-        x = x.permute(0, 2, 3, 1)
-        y_hat = self(x)
-        loss = F.cross_entropy(y_hat, y)
+        # x = x.permute(0, 2, 3, 1)
+        y_hat = self(x).view(-1)
+        loss = F.l1_loss(y_hat, y)
 
         self.log("Training Loss", loss)
 
@@ -78,41 +78,41 @@ class PerceiverClassifier(pl.LightningModule):
 
     def evaluate(self, batch, stage=None):
         x, y = batch
-        x = x.permute(0, 2, 3, 1)
-        logits = self(x)
-        loss = F.cross_entropy(logits, y)
-        preds = torch.argmax(logits, dim=1)
-        acc = accuracy(preds, y)
+        # x = x.permute(0, 2, 3, 1)
+        y_hat = self(x).view(-1)
+        loss = F.l1_loss(y_hat, y)
+        # preds = torch.argmax(logits, dim=1)
+        # acc = accuracy(preds, y)
 
         if stage:
             self.log(f"{stage}_loss", loss, prog_bar=True)
-            self.log(f"{stage}_acc", acc, prog_bar=True)
-        return {"loss": loss, "acc": acc, "preds": preds, "y": y}
+        # self.log(f"{stage}_acc", acc, prog_bar=True)
+        return {"loss": loss, "y": y}
 
     def epoch_evaluate(self, step_outputs, stage=None):
         y_list = []
-        preds_list = []
+        # preds_list = []
         loss_list = []
-        acc_list = []
+        # acc_list = []
         for output in step_outputs:
             # print(output)
             y_list.append(output["y"])
-            preds_list.append(output["preds"])
+            # preds_list.append(output["preds"])
             loss_list.append(output["loss"])
-            acc_list.append(output["acc"])
+            # acc_list.append(output["acc"])
         # print(loss_list)
         y_cat = torch.cat(y_list)
-        preds_cat = torch.cat(preds_list)
+        # preds_cat = torch.cat(preds_list)
         loss_cat = torch.tensor(loss_list)
-        acc_cat = torch.tensor(acc_list)
-        acc = accuracy(preds_cat, y_cat)
+        # acc_cat = torch.tensor(acc_list)
+        # acc = accuracy(preds_cat, y_cat)
         loss = torch.mean(loss_cat)
-        macc = torch.mean(acc_cat)
+        # macc = torch.mean(acc_cat)
 
         if stage:
-            self.log(f"{stage}_epoch_acc", acc)
+            # self.log(f"{stage}_epoch_acc", acc)
             self.log(f"{stage}_epoch_loss", loss)
-            self.log(f"{stage}_epoch_macc", macc)
+            # self.log(f"{stage}_epoch_macc", macc)
 
     def validation_step(self, batch, batch_idx):
         return self.evaluate(batch, "val")
@@ -390,11 +390,14 @@ class Perceiver(nn.Module):
             else nn.Identity()
         )
 
+        self.initial_emb = nn.Embedding(64, 1)
+
     def forward(self, data, mask=None, return_embeddings=False):
+
         b, *axis, _, device = *data.shape, data.device
-        assert (
-            len(axis) == self.input_axis
-        ), "input data must have the right number of axis"
+        # assert (
+        #     len(axis) == self.input_axis
+        # ), "input data must have the right number of axis"
 
         if self.fourier_encode_data:
             # calculate fourier encoded positions in the range of [-1, 1], for all axis
@@ -414,7 +417,7 @@ class Perceiver(nn.Module):
 
         # concat to channels of data and flatten axis
 
-        data = rearrange(data, "b ... d -> b (...) d")
+        data = self.initial_emb(rearrange(data, "b ... d -> b (...) d")).squeeze(-1)
 
         x = repeat(self.latents, "n d -> b n d", b=b)
 
