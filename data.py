@@ -1,5 +1,6 @@
 from torch_geometric.datasets import ZINC
 import torch
+import pickle
 
 
 def preprocess_item(item):
@@ -8,6 +9,14 @@ def preprocess_item(item):
 
 
 class MyZINCDataset(ZINC):
+    def __init__(self, root, subset=False, split="train", overwrite_x=None):
+        super().__init__(root, subset=subset, split=split)
+
+        self.overwrite_x = overwrite_x
+        if overwrite_x is not None:
+            with open(overwrite_x, "rb") as handle:
+                self.new_x = pickle.load(handle)
+
     def download(self):
         super(MyZINCDataset, self).download()
 
@@ -18,6 +27,9 @@ class MyZINCDataset(ZINC):
         if isinstance(idx, int):
             item = self.get(self.indices()[idx])
             item.idx = idx
+
+            if self.overwrite_x is not None:
+                item.x = self.new_x[idx]
             return preprocess_item(item)
         else:
             return self.index_select(idx)

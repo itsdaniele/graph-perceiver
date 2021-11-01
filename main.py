@@ -7,7 +7,9 @@ from data import MyZINCDataset, collator
 
 def main():
 
-    zinc_train = MyZINCDataset(root="./data", subset=True, split="train")
+    zinc_train = MyZINCDataset(
+        root="./data", subset=True, split="train", overwrite_x="./embs.pt"
+    )
     zinc_val = MyZINCDataset(root="./data", subset=True, split="val")
 
     train_loader = torch.utils.data.DataLoader(
