@@ -23,10 +23,10 @@ class PerceiverRegressor(pl.LightningModule):
     def __init__(
         self,
         input_channels=3,
-        depth=5,
+        depth=6,
         num_latents=32,
         latent_dim=64,
-        cross_heads=1,
+        cross_heads=8,
         latent_heads=8,
         cross_dim_head=64,
         latent_dim_head=64,
@@ -35,8 +35,11 @@ class PerceiverRegressor(pl.LightningModule):
         ff_dropout=0.0,
         weight_tie_layers=False,
         self_per_cross_attn=2,
+        initial_emb=True,
     ):
         super().__init__()
+
+        self.initial_emb = initial_emb
         self.save_hyperparameters()
 
         self.perceiver = Perceiver(
@@ -55,12 +58,12 @@ class PerceiverRegressor(pl.LightningModule):
             self_per_cross_attn=self_per_cross_attn,
         )
 
-    def forward(self, x, initial_emb=True):
-        return self.perceiver(x, initial_emb=initial_emb)
+    def forward(self, x, **kwargs):
+        return self.perceiver(x, **kwargs)
 
     def training_step(self, batch, batch_idx):
-        x, y = batch
-        y_hat = self(x, initial_emb=False).view(-1)
+        x, y, mask = batch
+        y_hat = self(x, initial_emb=self.initial_emb, mask=mask).view(-1)
         loss = F.l1_loss(y_hat, y)
 
         self.log("Training Loss", loss)
@@ -68,8 +71,8 @@ class PerceiverRegressor(pl.LightningModule):
         return loss
 
     def evaluate(self, batch, stage=None):
-        x, y = batch
-        y_hat = self(x).view(-1)
+        x, y, mask = batch
+        y_hat = self(x, initial_emb=self.initial_emb, mask=mask).view(-1)
         loss = F.l1_loss(y_hat, y)
 
         if stage:
@@ -322,19 +325,36 @@ class Perceiver(nn.Module):
                     )
                 )
 
-            self.layers.append(
-                nn.ModuleList(
-                    [
-                        get_cross_attn(**cache_args),
-                        get_cross_ff(**cache_args),
-                        self_attns,
-                    ]
+            if i == 0:
+                self.layers.append(
+                    nn.ModuleList(
+                        [
+                            Attention(
+                                latent_dim,
+                                input_dim,
+                                heads=cross_heads,
+                                dim_head=cross_dim_head,
+                                dropout=attn_dropout,
+                            ),
+                            get_cross_ff(**cache_args),
+                            self_attns,
+                        ]
+                    )
                 )
-            )
+            else:
+                self.layers.append(
+                    nn.ModuleList(
+                        [
+                            get_cross_attn(**cache_args),
+                            get_cross_ff(**cache_args),
+                            self_attns,
+                        ]
+                    )
+                )
 
         self.to_logits = (
             nn.Sequential(
-                Reduce("b n d -> b d", "mean"),
+                Reduce("b n d -> b d", "sum"),
                 nn.LayerNorm(latent_dim),
                 nn.Linear(latent_dim, num_classes),
             )
@@ -346,10 +366,7 @@ class Perceiver(nn.Module):
 
     def forward(self, data, mask=None, initial_emb=True, return_embeddings=False):
 
-        b, *axis, _, device = *data.shape, data.device
-        # assert (
-        #     len(axis) == self.input_axis
-        # ), "input data must have the right number of axis"
+        b = data.shape[0]
 
         if initial_emb:
             data = self.initial_emb(rearrange(data, "b ... d -> b (...) d")).squeeze(-1)

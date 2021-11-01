@@ -8,9 +8,14 @@ from data import MyZINCDataset, collator
 def main():
 
     zinc_train = MyZINCDataset(
-        root="./data", subset=True, split="train", overwrite_x="./embs.pt"
+        root="./data", subset=True, split="train", overwrite_x="./embs_train.pt"
     )
-    zinc_val = MyZINCDataset(root="./data", subset=True, split="val")
+    zinc_val = MyZINCDataset(
+        root="./data", subset=True, split="val", overwrite_x="./embs_val.pt"
+    )
+
+    # zinc_train = MyZINCDataset(root="./data", subset=True, split="train")
+    # zinc_val = MyZINCDataset(root="./data", subset=True, split="val")
 
     train_loader = torch.utils.data.DataLoader(
         zinc_train, batch_size=64, shuffle=True, collate_fn=collator
@@ -33,6 +38,7 @@ def main():
         ff_dropout=0.0,
         num_classes=1,
         weight_tie_layers=True,
+        initial_emb=False,
     )
     trainer = pl.Trainer(
         gpus=0,

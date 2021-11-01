@@ -54,4 +54,9 @@ def collator(items, max_node_num=128):
     y = torch.cat(ys)
     x = torch.cat([pad_2d_unsqueeze(i, max_node_num) for i in xs])
 
-    return x, y
+    mask = torch.zeros_like(x).squeeze(-1).bool()
+
+    for i in range(x.shape[0]):
+        mask[i, : xs[i].shape[0]] = True
+
+    return x, y, mask
