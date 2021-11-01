@@ -8,20 +8,20 @@ from data import MyZINCDataset, collator
 def main():
 
     zinc_train = MyZINCDataset(
-        root="./data", subset=True, split="train", overwrite_x="./embs_train.pt"
+        root="./data", subset=True, split="train", overwrite_x="./embs_train_2.pt"
     )
     zinc_val = MyZINCDataset(
-        root="./data", subset=True, split="val", overwrite_x="./embs_val.pt"
+        root="./data", subset=True, split="val", overwrite_x="./embs_val_2.pt"
     )
 
     # zinc_train = MyZINCDataset(root="./data", subset=True, split="train")
     # zinc_val = MyZINCDataset(root="./data", subset=True, split="val")
 
     train_loader = torch.utils.data.DataLoader(
-        zinc_train, batch_size=64, shuffle=True, collate_fn=collator
+        zinc_train, batch_size=256, shuffle=True, collate_fn=collator, num_workers=32
     )
     val_loader = torch.utils.data.DataLoader(
-        zinc_val, batch_size=64, shuffle=False, collate_fn=collator
+        zinc_val, batch_size=256, shuffle=False, collate_fn=collator, num_workers=32
     )
 
     mc = ModelCheckpoint(
@@ -32,19 +32,18 @@ def main():
     )
 
     model = PerceiverRegressor(
-        input_channels=1,
-        depth=1,
-        attn_dropout=0.0,
-        ff_dropout=0.0,
-        num_classes=1,
-        weight_tie_layers=True,
+        input_channels=64,
+        depth=12,
+        attn_dropout=0.1,
+        ff_dropout=0.1,
+        weight_tie_layers=False,
         initial_emb=False,
     )
     trainer = pl.Trainer(
-        gpus=0,
+        gpus=1,
         precision=32,
         log_gpu_memory=True,
-        max_epochs=40,
+        max_epochs=400,
         progress_bar_refresh_rate=5,
         benchmark=True,
         callbacks=[mc],

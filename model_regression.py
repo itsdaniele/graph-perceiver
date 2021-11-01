@@ -24,17 +24,16 @@ class PerceiverRegressor(pl.LightningModule):
         self,
         input_channels=3,
         depth=6,
-        num_latents=32,
-        latent_dim=64,
+        num_latents=16,
+        latent_dim=80,
         cross_heads=8,
         latent_heads=8,
-        cross_dim_head=64,
-        latent_dim_head=64,
-        num_classes=1,
+        cross_dim_head=32,
+        latent_dim_head=32,
         attn_dropout=0.0,
         ff_dropout=0.0,
         weight_tie_layers=False,
-        self_per_cross_attn=2,
+        self_per_cross_attn=1,
         initial_emb=True,
     ):
         super().__init__()
@@ -51,7 +50,6 @@ class PerceiverRegressor(pl.LightningModule):
             latent_heads=latent_heads,
             cross_dim_head=cross_dim_head,
             latent_dim_head=latent_dim_head,
-            num_classes=num_classes,
             attn_dropout=attn_dropout,
             ff_dropout=ff_dropout,
             weight_tie_layers=weight_tie_layers,
@@ -114,15 +112,16 @@ class PerceiverRegressor(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=0.001)
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": torch.optim.lr_scheduler.ExponentialLR(
-                    optimizer, gamma=0.9
-                ),
-                "monitor": "metric_to_track",
-            },
-        }
+        # return {
+        #     "optimizer": optimizer,
+        #     "lr_scheduler": {
+        #         "scheduler": torch.optim.lr_scheduler.ExponentialLR(
+        #             optimizer, gamma=0.9
+        #         ),
+        #         "monitor": "metric_to_track",
+        #     },
+        # }
+        return [optimizer]
 
 
 def exists(val):
@@ -246,12 +245,11 @@ class Perceiver(nn.Module):
         latent_heads=8,
         cross_dim_head=64,
         latent_dim_head=64,
-        num_classes=1000,
         attn_dropout=0.0,
         ff_dropout=0.0,
         weight_tie_layers=False,
         self_per_cross_attn=1,
-        final_classifier_head=True,
+        final_head=True,
     ):
         """The shape of the final attention mechanism will be:
         depth * (cross attention -> self_per_cross_attn * self attention)
@@ -267,12 +265,11 @@ class Perceiver(nn.Module):
           latent_heads: Number of heads for latent self attention, 8.
           cross_dim_head: Number of dimensions per cross attention head.
           latent_dim_head: Number of dimensions per latent self attention head.
-          num_classes: Output number of classes.
           attn_dropout: Attention dropout
           ff_dropout: Feedforward dropout
           weight_tie_layers: Whether to weight tie layers (optional).
           self_per_cross_attn: Number of self attention blocks per cross attn.
-          final_classifier_head: mean pool and project embeddings to number of classes (num_classes) at the end
+          final_head: mean pool and project embeddings to number of classes (num_classes) at the end
         """
         super().__init__()
 
@@ -352,13 +349,13 @@ class Perceiver(nn.Module):
                     )
                 )
 
-        self.to_logits = (
+        self.to_out = (
             nn.Sequential(
                 Reduce("b n d -> b d", "sum"),
                 nn.LayerNorm(latent_dim),
-                nn.Linear(latent_dim, num_classes),
+                nn.Linear(latent_dim, 1),
             )
-            if final_classifier_head
+            if final_head
             else nn.Identity()
         )
 
@@ -369,9 +366,7 @@ class Perceiver(nn.Module):
         b = data.shape[0]
 
         if initial_emb:
-            data = self.initial_emb(rearrange(data, "b ... d -> b (...) d")).squeeze(-1)
-        else:
-            data = rearrange(data, "b ... d -> b (...) d")
+            data = self.initial_emb(data).squeeze(-1)
 
         x = repeat(self.latents, "n d -> b n d", b=b)
 
@@ -392,4 +387,4 @@ class Perceiver(nn.Module):
 
         # to logits
 
-        return self.to_logits(x)
+        return self.to_out(x)
