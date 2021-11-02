@@ -9,11 +9,11 @@ class GCNZinc(torch.nn.Module):
     def __init__(self):
         super(GCNZinc, self).__init__()
 
-        self.emb = torch.nn.Embedding(28, 128)
+        self.emb = torch.nn.Embedding(28, 256)
         self.edge_emb = torch.nn.Embedding(32, 1)
-        self.conv1 = GCNConv(128, 128)
-        self.conv2 = GCNConv(128, 128)
-        self.lin1 = torch.nn.Linear(128, 64)
+        self.conv1 = GCNConv(256, 256)
+        self.conv2 = GCNConv(256, 256)
+        self.lin1 = torch.nn.Linear(256, 64)
         self.lin2 = torch.nn.Linear(64, 1)
 
     def forward(self, data, get_emb=False):
@@ -23,7 +23,11 @@ class GCNZinc(torch.nn.Module):
         x = F.relu(self.conv1(x, edge_index))
         x = F.dropout(x, training=self.training)
         emb = F.relu(self.conv2(x, edge_index))
-        x = F.relu(scatter_mean(emb, data.batch, dim=0))
+
+        if hasattr(data, "batch"):
+            x = F.relu(scatter_mean(emb, data.batch, dim=0))
+        else:
+            x = F.relu(torch.mean(emb, dim=0)).unsqueeze(0)
         x = F.relu(self.lin1(x))
         x = self.lin2(x)
 

@@ -8,10 +8,10 @@ from data import MyZINCDataset, collator
 def main():
 
     zinc_train = MyZINCDataset(
-        root="./data", subset=True, split="train", overwrite_x="./embs_train_2.pt"
+        root="./data", subset=True, split="train", overwrite_x="./embs_train_4.pt"
     )
     zinc_val = MyZINCDataset(
-        root="./data", subset=True, split="val", overwrite_x="./embs_val_2.pt"
+        root="./data", subset=True, split="val", overwrite_x="./embs_val_4.pt"
     )
 
     # zinc_train = MyZINCDataset(root="./data", subset=True, split="train")
@@ -32,12 +32,13 @@ def main():
     )
 
     model = PerceiverRegressor(
-        input_channels=64,
-        depth=12,
+        input_channels=256,
+        depth=8,
         attn_dropout=0.1,
         ff_dropout=0.1,
         weight_tie_layers=False,
         initial_emb=False,
+        encodings_dim=8,
     )
     trainer = pl.Trainer(
         gpus=1,

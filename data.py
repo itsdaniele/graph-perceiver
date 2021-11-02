@@ -1,11 +1,21 @@
 from torch_geometric.datasets import ZINC
 import torch
+import torch.nn.functional as F
 import pickle
+import scipy as sp
+
+from scipy import sparse as sp
+
+
+from torch_geometric.utils import to_dense_adj, degree, dense_to_sparse
+import numpy as np
 
 
 def preprocess_item(item):
     x, y = item.x, item.y
-    return x, y
+
+    lap = laplacian_positional_encoding(item)
+    return x, lap, y
 
 
 class MyZINCDataset(ZINC):
@@ -45,13 +55,31 @@ def pad_2d_unsqueeze(x, padlen):
     return x.unsqueeze(0)
 
 
+def laplacian_positional_encoding(data, pos_enc_dim=8):
+    """
+        Graph positional encoding v/ Laplacian eigenvectors
+    """
+
+    # Laplacian
+    A = to_dense_adj(data.edge_index).squeeze(0).numpy()
+    N = np.diag(A.sum(axis=1).clip(1) ** -0.5)
+    L = np.eye(data.num_nodes) - N * A * N
+
+    # Eigenvectors with numpy
+    EigVal, EigVec = np.linalg.eig(L)
+    idx = EigVal.argsort()  # increasing order
+    EigVal, EigVec = EigVal[idx], np.real(EigVec[:, idx])
+    return torch.from_numpy(EigVec[:, 1 : pos_enc_dim + 1]).float()
+
+
 def collator(items, max_node_num=128):
 
     items = [item for item in items if item is not None]
-    items = [(item[0], item[1]) for item in items]
-    (xs, ys) = zip(*items)
+    items = [(item[0], item[1], item[2]) for item in items]
+    (xs, encodings, ys) = zip(*items)
 
     y = torch.cat(ys)
+    encodings = torch.cat([pad_2d_unsqueeze(i, max_node_num) for i in encodings])
     x = torch.cat([pad_2d_unsqueeze(i, max_node_num) for i in xs])
 
     mask = torch.zeros(x.shape[:2]).bool()
@@ -59,4 +87,4 @@ def collator(items, max_node_num=128):
     for i in range(x.shape[0]):
         mask[i, : xs[i].shape[0]] = True
 
-    return x, y, mask
+    return x, encodings, y, mask

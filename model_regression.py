@@ -25,7 +25,7 @@ class PerceiverRegressor(pl.LightningModule):
         input_channels=3,
         depth=6,
         num_latents=16,
-        latent_dim=80,
+        latent_dim=64,
         cross_heads=8,
         latent_heads=8,
         cross_dim_head=32,
@@ -35,6 +35,7 @@ class PerceiverRegressor(pl.LightningModule):
         weight_tie_layers=False,
         self_per_cross_attn=1,
         initial_emb=True,
+        encodings_dim=8,
     ):
         super().__init__()
 
@@ -54,14 +55,17 @@ class PerceiverRegressor(pl.LightningModule):
             ff_dropout=ff_dropout,
             weight_tie_layers=weight_tie_layers,
             self_per_cross_attn=self_per_cross_attn,
+            encodings_dim=encodings_dim,
         )
 
     def forward(self, x, **kwargs):
         return self.perceiver(x, **kwargs)
 
     def training_step(self, batch, batch_idx):
-        x, y, mask = batch
-        y_hat = self(x, initial_emb=self.initial_emb, mask=mask).view(-1)
+        x, encodings, y, mask = batch
+        y_hat = self(
+            x, encodings=encodings, initial_emb=self.initial_emb, mask=mask
+        ).view(-1)
         loss = F.l1_loss(y_hat, y)
 
         self.log("Training Loss", loss)
@@ -69,8 +73,10 @@ class PerceiverRegressor(pl.LightningModule):
         return loss
 
     def evaluate(self, batch, stage=None):
-        x, y, mask = batch
-        y_hat = self(x, initial_emb=self.initial_emb, mask=mask).view(-1)
+        x, encodings, y, mask = batch
+        y_hat = self(
+            x, encodings=encodings, initial_emb=self.initial_emb, mask=mask
+        ).view(-1)
         loss = F.l1_loss(y_hat, y)
 
         if stage:
@@ -111,7 +117,7 @@ class PerceiverRegressor(pl.LightningModule):
         self.epoch_evaluate(test_step_outputs, "test")
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=0.001)
+        optimizer = torch.optim.Adam(self.parameters(), lr=0.005)
         # return {
         #     "optimizer": optimizer,
         #     "lr_scheduler": {
@@ -250,6 +256,7 @@ class Perceiver(nn.Module):
         weight_tie_layers=False,
         self_per_cross_attn=1,
         final_head=True,
+        encodings_dim=8,
     ):
         """The shape of the final attention mechanism will be:
         depth * (cross attention -> self_per_cross_attn * self attention)
@@ -322,36 +329,36 @@ class Perceiver(nn.Module):
                     )
                 )
 
-            if i == 0:
-                self.layers.append(
-                    nn.ModuleList(
-                        [
-                            Attention(
-                                latent_dim,
-                                input_dim,
-                                heads=cross_heads,
-                                dim_head=cross_dim_head,
-                                dropout=attn_dropout,
-                            ),
-                            get_cross_ff(**cache_args),
-                            self_attns,
-                        ]
-                    )
+            # if i == 0:
+            #     self.layers.append(
+            #         nn.ModuleList(
+            #             [
+            #                 Attention(
+            #                     latent_dim,
+            #                     input_dim,
+            #                     heads=cross_heads,
+            #                     dim_head=cross_dim_head,
+            #                     dropout=attn_dropout,
+            #                 ),
+            #                 get_cross_ff(**cache_args),
+            #                 self_attns,
+            #             ]
+            #         )
+            #     )
+            # else:
+            self.layers.append(
+                nn.ModuleList(
+                    [
+                        get_cross_attn(**cache_args),
+                        get_cross_ff(**cache_args),
+                        self_attns,
+                    ]
                 )
-            else:
-                self.layers.append(
-                    nn.ModuleList(
-                        [
-                            get_cross_attn(**cache_args),
-                            get_cross_ff(**cache_args),
-                            self_attns,
-                        ]
-                    )
-                )
+            )
 
         self.to_out = (
             nn.Sequential(
-                Reduce("b n d -> b d", "sum"),
+                Reduce("b n d -> b d", "mean"),
                 nn.LayerNorm(latent_dim),
                 nn.Linear(latent_dim, 1),
             )
@@ -359,14 +366,21 @@ class Perceiver(nn.Module):
             else nn.Identity()
         )
 
+        self.embed_encodings = nn.Linear(encodings_dim, input_dim)
+
         self.initial_emb = nn.Embedding(64, 1)
 
-    def forward(self, data, mask=None, initial_emb=True, return_embeddings=False):
+    def forward(
+        self, data, encodings=None, mask=None, initial_emb=True, return_embeddings=False
+    ):
 
         b = data.shape[0]
 
         if initial_emb:
             data = self.initial_emb(data).squeeze(-1)
+
+        if encodings is not None:
+            data += self.embed_encodings(encodings)
 
         x = repeat(self.latents, "n d -> b n d", b=b)
 

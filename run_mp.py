@@ -51,7 +51,7 @@ def test():
     print(f"Eval loss: {np.mean(losses)}")
 
 
-save_after = 10
+save_after = 190
 for epoch in range(200):
 
     train()
@@ -65,14 +65,14 @@ for epoch in range(200):
                 g = g.to(device)
                 embs = model(g, get_emb=True)
                 all_embs_train.append(embs.cpu())
-            with open("embs_train_2.pt", "wb") as handle:
+            with open("embs_train_4.pt", "wb") as handle:
                 pickle.dump(all_embs_train, handle)
 
             for g in tqdm(data_val):
                 g = g.to(device)
                 embs = model(g, get_emb=True)
                 all_embs_val.append(embs.cpu())
-            with open("embs_val_2.pt", "wb") as handle:
+            with open("embs_val_4.pt", "wb") as handle:
                 pickle.dump(all_embs_val, handle)
             break
 
