@@ -1,5 +1,6 @@
 # Code mainly taken from https://github.com/lucidrains/perceiver-pytorch
 
+from math import pi, log
 from functools import wraps
 
 import torch
@@ -12,33 +13,10 @@ from einops.layers.torch import Reduce
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
-
-import torch
-import torch.nn.functional as F
-
-from torch_geometric.nn import GCNConv
-from torch_geometric.utils import to_dense_batch
-
-import torch_optimizer as optim
+from torchmetrics.functional import accuracy
 
 
-class GCNZinc(torch.nn.Module):
-    def __init__(self):
-        super(GCNZinc, self).__init__()
-
-        self.emb = torch.nn.Embedding(28, 128)
-        self.conv1 = GCNConv(128, 256)
-        self.conv2 = GCNConv(256, 256)
-        self.conv3 = GCNConv(256, 256)
-
-    def forward(self, data):
-        x, edge_index, edge_weight = data.x, data.edge_index, data.edge_attr
-        x = self.emb(x.squeeze(-1))
-        x = F.relu(self.conv1(x, edge_index, edge_weight.float()))
-        x = F.relu(self.conv2(x, edge_index, edge_weight.float())) + x
-        emb = F.relu(self.conv3(x, edge_index, edge_weight.float())) + x
-
-        return emb
+# helpers
 
 
 class PerceiverRegressor(pl.LightningModule):
@@ -47,19 +25,21 @@ class PerceiverRegressor(pl.LightningModule):
         input_channels=3,
         depth=6,
         num_latents=16,
-        latent_dim=32,
-        cross_heads=4,
-        latent_heads=4,
+        latent_dim=64,
+        cross_heads=8,
+        latent_heads=8,
         cross_dim_head=32,
         latent_dim_head=32,
         attn_dropout=0.0,
         ff_dropout=0.0,
         weight_tie_layers=False,
-        self_per_cross_attn=3,
+        self_per_cross_attn=1,
+        initial_emb=True,
         encodings_dim=8,
     ):
         super().__init__()
 
+        self.initial_emb = initial_emb
         self.save_hyperparameters()
 
         self.perceiver = Perceiver(
@@ -82,33 +62,71 @@ class PerceiverRegressor(pl.LightningModule):
         return self.perceiver(x, **kwargs)
 
     def training_step(self, batch, batch_idx):
-        y_hat = self(batch).view(-1)
-        loss = F.l1_loss(y_hat, batch.y)
+        x, encodings, y, mask = batch
+        y_hat = self(
+            x, encodings=encodings, initial_emb=self.initial_emb, mask=mask
+        ).view(-1)
+        loss = F.l1_loss(y_hat, y)
 
-        self.log("train/loss", loss)
+        self.log("Training Loss", loss)
 
         return loss
 
     def evaluate(self, batch, stage=None):
-        y_hat = self(batch).view(-1)
-        loss = F.l1_loss(y_hat, batch.y)
-        self.log("val/loss", loss)
-        return {"val/loss": loss, "y": batch.y}
+        x, encodings, y, mask = batch
+        y_hat = self(
+            x, encodings=encodings, initial_emb=self.initial_emb, mask=mask
+        ).view(-1)
+        loss = F.l1_loss(y_hat, y)
+
+        if stage:
+            self.log(f"{stage}_loss", loss, prog_bar=True)
+        return {"loss": loss, "y": y}
+
+    def epoch_evaluate(self, step_outputs, stage=None):
+        y_list = []
+
+        loss_list = []
+
+        for output in step_outputs:
+
+            y_list.append(output["y"])
+
+            loss_list.append(output["loss"])
+
+        y_cat = torch.cat(y_list)
+
+        loss_cat = torch.tensor(loss_list)
+
+        loss = torch.mean(loss_cat)
+
+        if stage:
+
+            self.log(f"{stage}_epoch_loss", loss)
 
     def validation_step(self, batch, batch_idx):
         return self.evaluate(batch, "val")
 
+    def validation_epoch_end(self, val_step_outputs):
+        self.epoch_evaluate(val_step_outputs, "val")
+
     def test_step(self, batch, batch_idx):
         return self.evaluate(batch, "test")
 
+    def test_epoch_end(self, test_step_outputs):
+        self.epoch_evaluate(test_step_outputs, "test")
+
     def configure_optimizers(self):
-        optimizer = optimizer = optim.Lamb(self.parameters(), lr=0.001)
-
-        # lr_scheduler = {
-        #     "scheduler": torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9),
-        #     "monitor": "val/loss",
+        optimizer = torch.optim.Adam(self.parameters(), lr=0.005)
+        # return {
+        #     "optimizer": optimizer,
+        #     "lr_scheduler": {
+        #         "scheduler": torch.optim.lr_scheduler.ExponentialLR(
+        #             optimizer, gamma=0.9
+        #         ),
+        #         "monitor": "metric_to_track",
+        #     },
         # }
-
         return [optimizer]
 
 
@@ -246,6 +264,7 @@ class Perceiver(nn.Module):
         Args:
           depth: Depth of net.
           input_channels: Number of channels for each token of the input.
+          input_axis: Number of axes for input data (2 for images, 3 for video)
           num_latents: Number of latents, or induced set points, or centroids.
               Different papers giving it different names.
           latent_dim: Latent dimension.
@@ -263,8 +282,6 @@ class Perceiver(nn.Module):
 
         input_dim = input_channels
 
-        self.gnn = GCNZinc()
-        self.embed_encodings = nn.Linear(encodings_dim, input_dim)
         self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
 
         get_cross_attn = lambda: PreNorm(
@@ -312,6 +329,23 @@ class Perceiver(nn.Module):
                     )
                 )
 
+            # if i == 0:
+            #     self.layers.append(
+            #         nn.ModuleList(
+            #             [
+            #                 Attention(
+            #                     latent_dim,
+            #                     input_dim,
+            #                     heads=cross_heads,
+            #                     dim_head=cross_dim_head,
+            #                     dropout=attn_dropout,
+            #                 ),
+            #                 get_cross_ff(**cache_args),
+            #                 self_attns,
+            #             ]
+            #         )
+            #     )
+            # else:
             self.layers.append(
                 nn.ModuleList(
                     [
@@ -332,16 +366,22 @@ class Perceiver(nn.Module):
             else nn.Identity()
         )
 
-    def forward(self, batch, return_embeddings=False):
+        self.embed_encodings = nn.Linear(encodings_dim, input_dim)
 
-        data = self.gnn(batch)
+        self.initial_emb = nn.Embedding(64, 1)
 
-        data, mask = to_dense_batch(data, batch.batch, max_num_nodes=128)
-        lap, _ = to_dense_batch(batch.lap, batch.batch, max_num_nodes=128)
-
-        data += self.embed_encodings(lap)
+    def forward(
+        self, data, encodings=None, mask=None, initial_emb=True, return_embeddings=False
+    ):
 
         b = data.shape[0]
+
+        if initial_emb:
+            data = self.initial_emb(data).squeeze(-1)
+
+        if encodings is not None:
+            data += self.embed_encodings(encodings)
+
         x = repeat(self.latents, "n d -> b n d", b=b)
 
         # layers
@@ -355,8 +395,10 @@ class Perceiver(nn.Module):
                 x = self_ff(x) + x
 
         # allow for fetching embeddings
+
         if return_embeddings:
             return x
 
         # to logits
+
         return self.to_out(x)
