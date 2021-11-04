@@ -19,6 +19,8 @@ import torch.nn.functional as F
 from torch_geometric.nn import GCNConv, GATConv
 from torch_geometric.utils import to_dense_batch
 
+import torchmetrics
+
 
 class GCNZinc(torch.nn.Module):
     def __init__(self):
@@ -50,14 +52,13 @@ class PerceiverClassifier(pl.LightningModule):
         latent_heads=4,
         cross_dim_head=32,
         latent_dim_head=32,
-        encodings_dim=8,
         logits_dim=6,
     ):
         super().__init__()
 
         self.save_hyperparameters()
 
-        queries_dim = latent_dim
+        queries_dim = 256
 
         self.perceiver = Perceiver(
             input_channels=input_channels,
@@ -69,7 +70,6 @@ class PerceiverClassifier(pl.LightningModule):
             latent_heads=latent_heads,
             cross_dim_head=cross_dim_head,
             latent_dim_head=latent_dim_head,
-            encodings_dim=encodings_dim,
             logits_dim=logits_dim,
         )
 
@@ -80,6 +80,9 @@ class PerceiverClassifier(pl.LightningModule):
         y_hat = self(batch).transpose(1, 2)
         y = to_dense_batch(batch.y, batch.batch, fill_value=99, max_num_nodes=190)[0]
         loss = F.cross_entropy(y_hat, y, ignore_index=99)
+
+        acc = torchmetrics.functional.accuracy(torch.argmax(y_hat, dim=-2), y)
+        self.log("train/acc", acc)
         self.log("train/loss", loss)
 
         return loss
@@ -88,6 +91,9 @@ class PerceiverClassifier(pl.LightningModule):
         y_hat = self(batch).transpose(1, 2)
         y = to_dense_batch(batch.y, batch.batch, fill_value=99, max_num_nodes=190)[0]
         loss = F.cross_entropy(y_hat, y, ignore_index=99)
+
+        acc = torchmetrics.functional.accuracy(torch.argmax(y_hat, dim=-2), y)
+        self.log("val/acc", acc)
         self.log("val/loss", loss)
 
     def validation_step(self, batch, batch_idx):
@@ -97,7 +103,7 @@ class PerceiverClassifier(pl.LightningModule):
         return self.evaluate(batch, "test")
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=0.003)
+        optimizer = torch.optim.Adam(self.parameters(), lr=0.001)
         # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
         # torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
         return [optimizer]
@@ -231,7 +237,6 @@ class Perceiver(nn.Module):
         cross_dim_head=64,
         latent_dim_head=64,
         weight_tie_layers=False,
-        encodings_dim=8,
         decoder_ff=False
     ):
         """The shape of the final attention mechanism will be:
@@ -258,9 +263,6 @@ class Perceiver(nn.Module):
         input_dim = input_channels
 
         self.gnn = GCNZinc()
-        self.embed_encodings = nn.Linear(encodings_dim, input_dim)
-
-        self.queries_linear = nn.Linear(6, queries_dim)
         self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
 
         self.cross_attend_blocks = nn.ModuleList(
@@ -315,11 +317,9 @@ class Perceiver(nn.Module):
 
         data = self.gnn(batch)
 
-        queries, queries_mask = to_dense_batch(
-            self.queries_linear(queries.x), queries.batch, max_num_nodes=190
-        )
-
         data, mask = to_dense_batch(data, batch.batch, max_num_nodes=190)
+
+        queries = data
 
         b = data.shape[0]
 
@@ -349,7 +349,7 @@ class Perceiver(nn.Module):
         # cross attend from decoder queries to latents
 
         latents = self.decoder_cross_attn(
-            queries, context=x, mask=queries_mask, is_query_mask=True
+            data, context=x, mask=mask, is_query_mask=True
         )
 
         # optional decoder feedforward
