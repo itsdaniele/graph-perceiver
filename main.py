@@ -21,18 +21,20 @@ def main():
         zinc_train = MyZINCDataset(root="./data", subset=True, split="train")
         zinc_val = MyZINCDataset(root="./data", subset=True, split="val")
 
-        train_loader = DataLoader(zinc_train, batch_size=128, shuffle=True)
-        val_loader = DataLoader(zinc_val, batch_size=128, shuffle=False)
+        train_loader = DataLoader(
+            zinc_train, batch_size=128, shuffle=True, num_workers=32
+        )
+        val_loader = DataLoader(zinc_val, batch_size=128, shuffle=False, num_workers=32)
     elif dataset == "cora":
 
         dataset = Planetoid(root="./data", name="Cora")
 
-    mc = ModelCheckpoint(
-        monitor="val/loss",
-        dirpath="./",
-        filename="zinc-{epoch:02d}-{val/loss:.2f}",
-        mode="min",
-    )
+    # mc = ModelCheckpoint(
+    #     monitor="val/loss",
+    #     dirpath="./",
+    #     filename="zinc-{epoch:02d}-{val/loss:.2f}",
+    #     mode="min",
+    # )
 
     model = PerceiverRegressor(
         input_channels=256,
@@ -47,7 +49,6 @@ def main():
         log_gpu_memory=True,
         max_epochs=10000,
         progress_bar_refresh_rate=5,
-        callbacks=[mc],
         logger=wandb_logger,
     )
     trainer.fit(model, train_loader, val_loader)

@@ -16,7 +16,7 @@ import torch.nn.functional as F
 import torch
 import torch.nn.functional as F
 
-from torch_geometric.nn import GCNConv
+from torch_geometric.nn import GCNConv, GATConv
 from torch_geometric.utils import to_dense_batch
 
 import torch_optimizer as optim
@@ -24,17 +24,35 @@ import torch_optimizer as optim
 
 class GCNZinc(torch.nn.Module):
     def __init__(self):
-        super(GCNZinc, self).__init__()
-
-        self.emb = torch.nn.Embedding(28, 128)
-        self.conv1 = GCNConv(128, 256)
+        super().__init__()
+        self.emb = torch.nn.Embedding(28, 256)
+        self.conv1 = GCNConv(256, 256)
         self.conv2 = GCNConv(256, 256)
         self.conv3 = GCNConv(256, 256)
 
     def forward(self, data):
         x, edge_index, edge_weight = data.x, data.edge_index, data.edge_attr
         x = self.emb(x.squeeze(-1))
-        x = F.relu(self.conv1(x, edge_index, edge_weight.float()))
+        x = F.relu(self.conv1(x, edge_index, edge_weight.float())) + x
+        x = F.relu(self.conv2(x, edge_index, edge_weight.float())) + x
+        emb = F.relu(self.conv3(x, edge_index, edge_weight.float())) + x
+
+        return emb
+
+
+class GATZinc(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.emb = torch.nn.Embedding(28, 256)
+        self.conv1 = GATConv(256, 256)
+        self.conv2 = GATConv(256, 256)
+        self.conv3 = GATConv(256, 256)
+
+    def forward(self, data):
+        x, edge_index, edge_weight = data.x, data.edge_index, data.edge_attr
+        x = self.emb(x.squeeze(-1))
+        x = F.relu(self.conv1(x, edge_index, edge_weight.float())) + x
         x = F.relu(self.conv2(x, edge_index, edge_weight.float())) + x
         emb = F.relu(self.conv3(x, edge_index, edge_weight.float())) + x
 
@@ -46,7 +64,7 @@ class PerceiverRegressor(pl.LightningModule):
         self,
         input_channels=3,
         depth=6,
-        num_latents=16,
+        num_latents=128,
         latent_dim=32,
         cross_heads=4,
         latent_heads=4,
@@ -55,7 +73,7 @@ class PerceiverRegressor(pl.LightningModule):
         attn_dropout=0.0,
         ff_dropout=0.0,
         weight_tie_layers=False,
-        self_per_cross_attn=3,
+        self_per_cross_attn=2,
         encodings_dim=8,
     ):
         super().__init__()
@@ -84,7 +102,6 @@ class PerceiverRegressor(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         y_hat = self(batch).view(-1)
         loss = F.l1_loss(y_hat, batch.y)
-
         self.log("train/loss", loss)
 
         return loss
@@ -93,7 +110,6 @@ class PerceiverRegressor(pl.LightningModule):
         y_hat = self(batch).view(-1)
         loss = F.l1_loss(y_hat, batch.y)
         self.log("val/loss", loss)
-        return {"val/loss": loss, "y": batch.y}
 
     def validation_step(self, batch, batch_idx):
         return self.evaluate(batch, "val")
@@ -102,13 +118,9 @@ class PerceiverRegressor(pl.LightningModule):
         return self.evaluate(batch, "test")
 
     def configure_optimizers(self):
-        optimizer = optimizer = optim.Lamb(self.parameters(), lr=0.001)
-
-        # lr_scheduler = {
-        #     "scheduler": torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9),
-        #     "monitor": "val/loss",
-        # }
-
+        optimizer = torch.optim.Adam(self.parameters(), lr=0.003)
+        # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
+        # torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
         return [optimizer]
 
 
