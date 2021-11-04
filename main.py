@@ -49,7 +49,7 @@ def main():
         log_gpu_memory=True,
         max_epochs=10000,
         progress_bar_refresh_rate=5,
-        logger=wandb_logger,
+        # logger=wandb_logger,
     )
     trainer.fit(model, train_loader, val_loader)
     # trainer.test(test_dataloaders=test_loader)
