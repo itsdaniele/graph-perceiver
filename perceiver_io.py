@@ -23,7 +23,7 @@ from torch_geometric.utils import to_dense_batch
 class GCNZinc(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.emb = torch.nn.Linear(10, 256)
+        self.emb = torch.nn.Linear(6, 256)
         self.conv1 = GCNConv(256, 256)
         self.conv2 = GCNConv(256, 256)
         self.conv3 = GCNConv(256, 256)
@@ -57,7 +57,7 @@ class PerceiverClassifier(pl.LightningModule):
 
         self.save_hyperparameters()
 
-        queries_dim = input_channels
+        queries_dim = latent_dim
 
         self.perceiver = Perceiver(
             input_channels=input_channels,
@@ -77,15 +77,17 @@ class PerceiverClassifier(pl.LightningModule):
         return self.perceiver(x, queries=x, **kwargs)
 
     def training_step(self, batch, batch_idx):
-        y_hat = self(batch).view(-1)
-        loss = F.cross_entropy(y_hat, batch.y)
+        y_hat = self(batch).transpose(1, 2)
+        y = to_dense_batch(batch.y, batch.batch, fill_value=99, max_num_nodes=190)[0]
+        loss = F.cross_entropy(y_hat, y, ignore_index=99)
         self.log("train/loss", loss)
 
         return loss
 
     def evaluate(self, batch, stage=None):
-        y_hat = self(batch).view(-1)
-        loss = F.cross_entropy(y_hat, batch.y)
+        y_hat = self(batch).transpose(1, 2)
+        y = to_dense_batch(batch.y, batch.batch, fill_value=99, max_num_nodes=190)[0]
+        loss = F.cross_entropy(y_hat, y, ignore_index=99)
         self.log("val/loss", loss)
 
     def validation_step(self, batch, batch_idx):
@@ -182,7 +184,7 @@ class Attention(nn.Module):
             nn.Linear(inner_dim, query_dim), nn.Dropout(dropout)
         )
 
-    def forward(self, x, context=None, mask=None):
+    def forward(self, x, context=None, mask=None, is_query_mask=False):
         h = self.heads
 
         q = self.to_q(x)
@@ -196,7 +198,11 @@ class Attention(nn.Module):
         if exists(mask):
             mask = rearrange(mask, "b ... -> b (...)")
             max_neg_value = -torch.finfo(sim.dtype).max
-            mask = repeat(mask, "b j -> (b h) () j", h=h)
+
+            if not is_query_mask:
+                mask = repeat(mask, "b j -> (b h) () j", h=h)
+            else:
+                mask = repeat(mask, "b j -> (b h) j ()", h=h)
             sim.masked_fill_(~mask, max_neg_value)
 
         # attention, what we cannot get enough of
@@ -253,6 +259,8 @@ class Perceiver(nn.Module):
 
         self.gnn = GCNZinc()
         self.embed_encodings = nn.Linear(encodings_dim, input_dim)
+
+        self.queries_linear = nn.Linear(6, queries_dim)
         self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
 
         self.cross_attend_blocks = nn.ModuleList(
@@ -307,7 +315,11 @@ class Perceiver(nn.Module):
 
         data = self.gnn(batch)
 
-        data, mask = to_dense_batch(data, batch.batch, max_num_nodes=128)
+        queries, queries_mask = to_dense_batch(
+            self.queries_linear(queries.x), queries.batch, max_num_nodes=190
+        )
+
+        data, mask = to_dense_batch(data, batch.batch, max_num_nodes=190)
 
         b = data.shape[0]
 
@@ -336,7 +348,9 @@ class Perceiver(nn.Module):
 
         # cross attend from decoder queries to latents
 
-        latents = self.decoder_cross_attn(queries, context=x)
+        latents = self.decoder_cross_attn(
+            queries, context=x, mask=queries_mask, is_query_mask=True
+        )
 
         # optional decoder feedforward
 
