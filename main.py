@@ -15,19 +15,11 @@ wandb_logger = WandbLogger(project="graph-perceiver")
 
 def main():
 
-    dataset = "zinc"
+    zinc_train = MyZINCDataset(root="./data", subset=True, split="train")
+    zinc_val = MyZINCDataset(root="./data", subset=True, split="val")
 
-    if dataset == "zinc":
-        zinc_train = MyZINCDataset(root="./data", subset=True, split="train")
-        zinc_val = MyZINCDataset(root="./data", subset=True, split="val")
-
-        train_loader = DataLoader(
-            zinc_train, batch_size=128, shuffle=True, num_workers=32
-        )
-        val_loader = DataLoader(zinc_val, batch_size=128, shuffle=False, num_workers=32)
-    elif dataset == "cora":
-
-        dataset = Planetoid(root="./data", name="Cora")
+    train_loader = DataLoader(zinc_train, batch_size=128, shuffle=True, num_workers=32)
+    val_loader = DataLoader(zinc_val, batch_size=128, shuffle=False, num_workers=32)
 
     # mc = ModelCheckpoint(
     #     monitor="val/loss",

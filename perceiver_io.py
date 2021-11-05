@@ -7,61 +7,61 @@ from torch import nn, einsum
 import torch.nn.functional as F
 
 from einops import rearrange, repeat
-from einops.layers.torch import Reduce
 
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
 
-import torch
-import torch.nn.functional as F
-
-from torch_geometric.nn import GCNConv, GATConv
+from torch_geometric.nn import GCNConv
+from torch_geometric.nn.conv.x_conv import XConv
 from torch_geometric.utils import to_dense_batch
 
 import torchmetrics
 
 
 class GCNZinc(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, input_dim=6, embed_dim=256):
         super().__init__()
-        self.emb = torch.nn.Linear(6, 256)
-        self.conv1 = GCNConv(256, 256)
-        self.conv2 = GCNConv(256, 256)
-        self.conv3 = GCNConv(256, 256)
+        self.emb = torch.nn.Linear(input_dim, embed_dim)
+        self.conv1 = GCNConv(embed_dim, embed_dim)
+        self.conv2 = GCNConv(embed_dim, embed_dim)
+        self.conv3 = GCNConv(embed_dim, embed_dim)
 
     def forward(self, data):
         x, edge_index = data.x, data.edge_index
         x = self.emb(x)
         x = F.relu(self.conv1(x, edge_index,)) + x
         x = F.relu(self.conv2(x, edge_index,)) + x
-        emb = F.relu(self.conv3(x, edge_index,)) + x
-
-        return emb
+        x = F.relu(self.conv3(x, edge_index,)) + x
+        return x
 
 
 class PerceiverClassifier(pl.LightningModule):
     def __init__(
         self,
         queries_dim=None,
-        input_channels=3,
+        input_channels=6,
+        gnn_embed_dim=256,
         depth=6,
-        num_latents=4,
+        num_latents=64,
         latent_dim=32,
         cross_heads=4,
         latent_heads=4,
         cross_dim_head=32,
         latent_dim_head=32,
         logits_dim=6,
+        pos_emb_dim=32,
+        decoder_ff=True,
     ):
         super().__init__()
 
         self.save_hyperparameters()
 
-        queries_dim = 256
+        queries_dim = gnn_embed_dim
 
         self.perceiver = Perceiver(
             input_channels=input_channels,
+            gnn_embed_dim=gnn_embed_dim,
             queries_dim=queries_dim,
             depth=depth,
             num_latents=num_latents,
@@ -71,6 +71,8 @@ class PerceiverClassifier(pl.LightningModule):
             cross_dim_head=cross_dim_head,
             latent_dim_head=latent_dim_head,
             logits_dim=logits_dim,
+            pos_emb_dim=pos_emb_dim,
+            decoder_ff=decoder_ff,
         )
 
     def forward(self, x, **kwargs):
@@ -229,6 +231,7 @@ class Perceiver(nn.Module):
         depth,
         queries_dim,
         input_channels=3,
+        gnn_embed_dim=256,
         logits_dim=None,
         num_latents=512,
         latent_dim=512,
@@ -236,6 +239,7 @@ class Perceiver(nn.Module):
         latent_heads=8,
         cross_dim_head=64,
         latent_dim_head=64,
+        pos_emb_dim=32,
         weight_tie_layers=False,
         decoder_ff=False
     ):
@@ -261,8 +265,9 @@ class Perceiver(nn.Module):
         super().__init__()
 
         input_dim = input_channels
+        self.embed_encoding = nn.Linear(pos_emb_dim, gnn_embed_dim)
 
-        self.gnn = GCNZinc()
+        self.gnn = GCNZinc(input_dim=input_dim, embed_dim=gnn_embed_dim)
         self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
 
         self.cross_attend_blocks = nn.ModuleList(
@@ -271,11 +276,11 @@ class Perceiver(nn.Module):
                     latent_dim,
                     Attention(
                         latent_dim,
-                        input_dim,
+                        gnn_embed_dim,
                         heads=cross_heads,
                         dim_head=cross_dim_head,
                     ),
-                    context_dim=input_dim,
+                    context_dim=gnn_embed_dim,
                 ),
                 PreNorm(latent_dim, FeedForward(latent_dim)),
             ]
@@ -318,7 +323,16 @@ class Perceiver(nn.Module):
         data = self.gnn(batch)
 
         data, mask = to_dense_batch(data, batch.batch, max_num_nodes=190)
+        lap, _ = to_dense_batch(batch.lap, batch.batch, max_num_nodes=190)
 
+        sign_flip = torch.rand(lap.size(-1)).to(lap.device)
+        sign_flip[sign_flip >= 0.5] = 1.0
+        sign_flip[sign_flip < 0.5] = -1.0
+        lap = lap * sign_flip.unsqueeze(0)
+
+        lap = self.embed_encoding(lap)
+
+        data = data + lap
         queries = data
 
         b = data.shape[0]

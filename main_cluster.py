@@ -2,7 +2,7 @@ import pytorch_lightning as pl
 from perceiver_io import PerceiverClassifier
 
 
-from torch_geometric.datasets import GNNBenchmarkDataset
+from data import MyGNNBenchmarkDataset
 from torch_geometric.data import DataLoader
 
 from pytorch_lightning.loggers import WandbLogger
@@ -13,13 +13,13 @@ wandb_logger = WandbLogger(project="graph-perceiver")
 
 def main():
 
-    data_train = GNNBenchmarkDataset(root="./data", name="CLUSTER", split="train")
-    data_val = GNNBenchmarkDataset(root="./data", name="CLUSTER", split="val")
+    data_train = MyGNNBenchmarkDataset(root="./data", name="CLUSTER", split="train")
+    data_val = MyGNNBenchmarkDataset(root="./data", name="CLUSTER", split="val")
 
     train_loader = DataLoader(data_train, batch_size=32, shuffle=True, num_workers=32)
     val_loader = DataLoader(data_val, batch_size=32, shuffle=False, num_workers=32)
 
-    model = PerceiverClassifier(input_channels=256, depth=4)
+    model = PerceiverClassifier(input_channels=6, depth=4)
     trainer = pl.Trainer(
         gpus=1,
         log_gpu_memory=True,

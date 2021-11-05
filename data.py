@@ -1,4 +1,4 @@
-from torch_geometric.datasets import ZINC
+from torch_geometric.datasets import ZINC, GNNBenchmarkDataset
 import torch
 import torch.nn.functional as F
 import pickle
@@ -11,9 +11,29 @@ from torch_geometric.utils import to_dense_adj, get_laplacian
 import numpy as np
 
 
-def preprocess_item(item):
-    item.lap = laplacian_positional_encoding(item)
+def preprocess_item(item, pos_enc_dim=8):
+    item.lap = laplacian_positional_encoding(item, pos_enc_dim=pos_enc_dim)
     return item
+
+
+class MyGNNBenchmarkDataset(GNNBenchmarkDataset):
+    def __init__(self, root, name="CLUSTER", split="train"):
+        super().__init__(root, name=name, split=split)
+
+    def download(self):
+        super(GNNBenchmarkDataset, self).download()
+
+    def process(self):
+        super(GNNBenchmarkDataset, self).process()
+
+    def __getitem__(self, idx):
+        if isinstance(idx, int):
+            item = self.get(self.indices()[idx])
+            item.idx = idx
+
+            return preprocess_item(item, pos_enc_dim=32)
+        else:
+            return self.index_select(idx)
 
 
 class MyZINCDataset(ZINC):
@@ -67,20 +87,3 @@ def laplacian_positional_encoding(data, pos_enc_dim=8):
     EigVal, EigVec = EigVal[idx], np.real(EigVec[:, idx])
     return torch.from_numpy(EigVec[:, 1 : pos_enc_dim + 1]).float()
 
-
-# def collator(items, max_node_num=128):
-
-#     items = [item for item in items if item is not None]
-#     items = [(item[0], item[1], item[2]) for item in items]
-#     (xs, encodings, ys) = zip(*items)
-
-#     y = torch.cat(ys)
-#     encodings = torch.cat([pad_2d_unsqueeze(i, max_node_num) for i in encodings])
-#     x = torch.cat([pad_2d_unsqueeze(i, max_node_num) for i in xs])
-
-#     mask = torch.zeros(x.shape[:2]).bool()
-
-#     for i in range(x.shape[0]):
-#         mask[i, : xs[i].shape[0]] = True
-
-#     return data, mask

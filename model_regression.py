@@ -2,9 +2,7 @@
 
 from functools import wraps
 
-import torch
 from torch import nn, einsum
-import torch.nn.functional as F
 
 from einops import rearrange, repeat
 from einops.layers.torch import Reduce
@@ -13,56 +11,32 @@ import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
 
-import torch
-import torch.nn.functional as F
-
-from torch_geometric.nn import GCNConv, GATConv
+from torch_geometric.nn import GCNConv
 from torch_geometric.utils import to_dense_batch
-
-# import torch_optimizer as optim
 
 
 class GCNZinc(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, input_dim=28, embedding_dim=256):
         super().__init__()
-        self.emb = torch.nn.Embedding(28, 256)
-        self.conv1 = GCNConv(256, 256)
-        self.conv2 = GCNConv(256, 256)
-        self.conv3 = GCNConv(256, 256)
+        self.emb = torch.nn.Embedding(input_dim, embedding_dim)
+        self.conv1 = GCNConv(embedding_dim, embedding_dim)
+        self.conv2 = GCNConv(embedding_dim, embedding_dim)
+        self.conv3 = GCNConv(embedding_dim, embedding_dim)
 
     def forward(self, data):
         x, edge_index, edge_weight = data.x, data.edge_index, data.edge_attr
         x = self.emb(x.squeeze(-1))
         x = F.relu(self.conv1(x, edge_index, edge_weight.float())) + x
         x = F.relu(self.conv2(x, edge_index, edge_weight.float())) + x
-        emb = F.relu(self.conv3(x, edge_index, edge_weight.float())) + x
-
-        return emb
-
-
-class GATZinc(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-
-        self.emb = torch.nn.Embedding(28, 256)
-        self.conv1 = GATConv(256, 256)
-        self.conv2 = GATConv(256, 256)
-        self.conv3 = GATConv(256, 256)
-
-    def forward(self, data):
-        x, edge_index, edge_weight = data.x, data.edge_index, data.edge_attr
-        x = self.emb(x.squeeze(-1))
-        x = F.relu(self.conv1(x, edge_index, edge_weight.float())) + x
-        x = F.relu(self.conv2(x, edge_index, edge_weight.float())) + x
-        emb = F.relu(self.conv3(x, edge_index, edge_weight.float())) + x
-
-        return emb
+        x = F.relu(self.conv3(x, edge_index, edge_weight.float())) + x
+        return x
 
 
 class PerceiverRegressor(pl.LightningModule):
     def __init__(
         self,
         input_channels=3,
+        gnn_embed_dim=256,
         depth=6,
         num_latents=128,
         latent_dim=32,
@@ -82,6 +56,7 @@ class PerceiverRegressor(pl.LightningModule):
 
         self.perceiver = Perceiver(
             input_channels=input_channels,
+            gnn_embed_dim=gnn_embed_dim,
             depth=depth,
             num_latents=num_latents,
             latent_dim=latent_dim,
@@ -107,7 +82,7 @@ class PerceiverRegressor(pl.LightningModule):
         return loss
 
     def evaluate(self, batch, stage=None):
-        y_hat = self(batch).view(-1)
+        y_hat = self(batch, training=False).view(-1)
         loss = F.l1_loss(y_hat, batch.y)
         self.log("val/loss", loss)
 
@@ -119,8 +94,6 @@ class PerceiverRegressor(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=0.003)
-        # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
-        # torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
         return [optimizer]
 
 
@@ -239,6 +212,7 @@ class Perceiver(nn.Module):
         *,
         depth,
         input_channels=3,
+        gnn_embed_dim=256,
         num_latents=512,
         latent_dim=512,
         cross_heads=1,
@@ -275,20 +249,20 @@ class Perceiver(nn.Module):
 
         input_dim = input_channels
 
-        self.gnn = GCNZinc()
-        self.embed_encodings = nn.Linear(encodings_dim, input_dim)
+        self.gnn = GCNZinc(input_dim=input_dim, embedding_dim=gnn_embed_dim)
+        self.embed_encodings = nn.Linear(encodings_dim, gnn_embed_dim)
         self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
 
         get_cross_attn = lambda: PreNorm(
             latent_dim,
             Attention(
                 latent_dim,
-                input_dim,
+                gnn_embed_dim,
                 heads=cross_heads,
                 dim_head=cross_dim_head,
                 dropout=attn_dropout,
             ),
-            context_dim=input_dim,
+            context_dim=gnn_embed_dim,
         )
         get_cross_ff = lambda: PreNorm(
             latent_dim, FeedForward(latent_dim, dropout=ff_dropout)
@@ -344,12 +318,18 @@ class Perceiver(nn.Module):
             else nn.Identity()
         )
 
-    def forward(self, batch, return_embeddings=False):
+    def forward(self, batch, return_embeddings=False, training=True):
 
         data = self.gnn(batch)
 
         data, mask = to_dense_batch(data, batch.batch, max_num_nodes=128)
         lap, _ = to_dense_batch(batch.lap, batch.batch, max_num_nodes=128)
+
+        if training == True:
+            sign_flip = torch.rand(lap.size(-1)).to(lap.device)
+            sign_flip[sign_flip >= 0.5] = 1.0
+            sign_flip[sign_flip < 0.5] = -1.0
+            lap = lap * sign_flip.unsqueeze(0)
 
         data += self.embed_encodings(lap)
 
