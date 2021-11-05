@@ -7,12 +7,17 @@ import scipy as sp
 from scipy import sparse as sp
 
 
-from torch_geometric.utils import to_dense_adj, get_laplacian
+from torch_geometric.utils import to_dense_adj, get_laplacian, degree
 import numpy as np
 
 
 def preprocess_item(item, pos_enc_dim=8):
     item.lap = laplacian_positional_encoding(item, pos_enc_dim=pos_enc_dim)
+    return item
+
+
+def preprocess_item_deg(item):
+    item.deg = degree(item.edge_index[1], dtype=int)
     return item
 
 
@@ -37,13 +42,8 @@ class MyGNNBenchmarkDataset(GNNBenchmarkDataset):
 
 
 class MyZINCDataset(ZINC):
-    def __init__(self, root, subset=False, split="train", overwrite_x=None):
+    def __init__(self, root, subset=False, split="train"):
         super().__init__(root, subset=subset, split=split)
-
-        self.overwrite_x = overwrite_x
-        if overwrite_x is not None:
-            with open(overwrite_x, "rb") as handle:
-                self.new_x = pickle.load(handle)
 
     def download(self):
         super(MyZINCDataset, self).download()
@@ -55,10 +55,7 @@ class MyZINCDataset(ZINC):
         if isinstance(idx, int):
             item = self.get(self.indices()[idx])
             item.idx = idx
-
-            if self.overwrite_x is not None:
-                item.x = self.new_x[idx]
-            return preprocess_item(item)
+            return preprocess_item_deg(item)
         else:
             return self.index_select(idx)
 
@@ -84,6 +81,6 @@ def laplacian_positional_encoding(data, pos_enc_dim=8):
     # Eigenvectors with numpy
     EigVal, EigVec = np.linalg.eig(L)
     idx = EigVal.argsort()  # increasing order
-    EigVal, EigVec = EigVal[idx], np.real(EigVec[:, idx])
+    EigVec = np.real(EigVec[:, idx])
     return torch.from_numpy(EigVec[:, 1 : pos_enc_dim + 1]).float()
 

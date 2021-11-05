@@ -308,6 +308,8 @@ class Perceiver(nn.Module):
                 )
             )
 
+        self.deg_to_emb = torch.nn.Embedding(64, 256)
+
         self.to_out = (
             nn.Sequential(
                 Reduce("b n d -> b d", "mean"),
@@ -322,16 +324,24 @@ class Perceiver(nn.Module):
 
         data = self.gnn(batch)
 
+        deg = True
+
         data, mask = to_dense_batch(data, batch.batch, max_num_nodes=128)
-        lap, _ = to_dense_batch(batch.lap, batch.batch, max_num_nodes=128)
 
-        if training == True:
-            sign_flip = torch.rand(lap.size(-1)).to(lap.device)
-            sign_flip[sign_flip >= 0.5] = 1.0
-            sign_flip[sign_flip < 0.5] = -1.0
-            lap = lap * sign_flip.unsqueeze(0)
+        if not deg:
+            lap, _ = to_dense_batch(batch.lap, batch.batch, max_num_nodes=128)
 
-        data += self.embed_encodings(lap)
+            if training == True:
+                sign_flip = torch.rand(lap.size(-1)).to(lap.device)
+                sign_flip[sign_flip >= 0.5] = 1.0
+                sign_flip[sign_flip < 0.5] = -1.0
+                lap = lap * sign_flip.unsqueeze(0)
+
+            data += self.embed_encodings(lap)
+        else:
+            deg, _ = to_dense_batch(batch.deg, batch.batch, max_num_nodes=128)
+            deg = self.deg_to_emb(deg)
+            data += deg
 
         b = data.shape[0]
         x = repeat(self.latents, "n d -> b n d", b=b)

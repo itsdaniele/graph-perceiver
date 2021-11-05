@@ -1,13 +1,10 @@
 import pytorch_lightning as pl
-import torch
 from pytorch_lightning.callbacks import ModelCheckpoint
 from model_regression import PerceiverRegressor
 
 from data import MyZINCDataset
-from torch_geometric.datasets import Planetoid
 
 from torch_geometric.data import DataLoader
-
 from pytorch_lightning.loggers import WandbLogger
 
 wandb_logger = WandbLogger(project="graph-perceiver")
@@ -38,7 +35,7 @@ def main():
     )
     trainer = pl.Trainer(
         gpus=1,
-        log_gpu_memory=True,
+        log_gpu_memory=False,
         max_epochs=10000,
         progress_bar_refresh_rate=5,
         logger=wandb_logger,
