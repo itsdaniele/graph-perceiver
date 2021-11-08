@@ -11,66 +11,32 @@ import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
 
-from torch_geometric.nn import GCNConv
 from torch_geometric.utils import to_dense_batch
-
-
-class GCNZinc(torch.nn.Module):
-    def __init__(self, input_dim=64, embedding_dim=256):
-        super().__init__()
-        self.emb = torch.nn.Embedding(input_dim, embedding_dim)
-        self.edge_emb = torch.nn.Embedding(64, 1)
-        self.conv1 = GCNConv(embedding_dim, embedding_dim)
-        self.conv2 = GCNConv(embedding_dim, embedding_dim)
-        self.conv3 = GCNConv(embedding_dim, embedding_dim)
-
-    def forward(self, data):
-        x, edge_index, edge_weight = data.x, data.edge_index, data.edge_attr
-        edge_weight = self.edge_emb(edge_weight).squeeze(-1)
-        x = self.emb(x.squeeze(-1))
-        x = F.relu(self.conv1(x, edge_index, edge_weight)) + x
-        x = F.relu(self.conv2(x, edge_index, edge_weight)) + x
-        x = F.relu(self.conv3(x, edge_index, edge_weight)) + x
-        return x
 
 
 class PerceiverRegressor(pl.LightningModule):
     def __init__(
         self,
-        input_channels=3,
-        gnn_embed_dim=256,
-        depth=6,
-        num_latents=128,
-        latent_dim=32,
-        cross_heads=4,
-        latent_heads=4,
-        cross_dim_head=32,
-        latent_dim_head=32,
+        depth=12,
+        latent_dim=80,
+        latent_heads=8,
+        latent_dim_head=10,
         attn_dropout=0.0,
         ff_dropout=0.0,
         weight_tie_layers=False,
-        self_per_cross_attn=2,
-        encodings_dim=8,
     ):
         super().__init__()
 
         self.save_hyperparameters()
 
         self.perceiver = Perceiver(
-            input_channels=input_channels,
-            gnn_embed_dim=gnn_embed_dim,
             depth=depth,
-            num_latents=num_latents,
             latent_dim=latent_dim,
-            cross_heads=cross_heads,
             latent_heads=latent_heads,
-            cross_dim_head=cross_dim_head,
             latent_dim_head=latent_dim_head,
             attn_dropout=attn_dropout,
             ff_dropout=ff_dropout,
             weight_tie_layers=weight_tie_layers,
-            self_per_cross_attn=self_per_cross_attn,
-            encodings_dim=encodings_dim,
         )
 
     def forward(self, x, **kwargs):
@@ -84,7 +50,7 @@ class PerceiverRegressor(pl.LightningModule):
         return loss
 
     def evaluate(self, batch, stage=None):
-        y_hat = self(batch, training=False).view(-1)
+        y_hat = self(batch).view(-1)
         loss = F.l1_loss(y_hat, batch.y)
         self.log("val/loss", loss)
 
@@ -95,7 +61,7 @@ class PerceiverRegressor(pl.LightningModule):
         return self.evaluate(batch, "test")
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=0.003)
+        optimizer = torch.optim.Adam(self.parameters(), lr=2e-4)
         return [optimizer]
 
 
@@ -151,7 +117,7 @@ class GEGLU(nn.Module):
 
 
 class FeedForward(nn.Module):
-    def __init__(self, dim, mult=4, dropout=0.0):
+    def __init__(self, dim, mult=2, dropout=0.0):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(dim, dim * mult * 2),
@@ -222,20 +188,13 @@ class Perceiver(nn.Module):
         self,
         *,
         depth,
-        input_channels=3,
-        gnn_embed_dim=256,
-        num_latents=512,
         latent_dim=512,
-        cross_heads=1,
         latent_heads=8,
-        cross_dim_head=64,
         latent_dim_head=64,
         attn_dropout=0.0,
         ff_dropout=0.0,
         weight_tie_layers=False,
-        self_per_cross_attn=1,
         final_head=True,
-        encodings_dim=8,
     ):
         """The shape of the final attention mechanism will be:
         depth * (cross attention -> self_per_cross_attn * self attention)
@@ -258,26 +217,9 @@ class Perceiver(nn.Module):
         """
         super().__init__()
 
-        input_dim = input_channels
+        self.atom_encoder = nn.Embedding(64, latent_dim)
+        self.edge_encoder = nn.Embedding(64, 1)
 
-        self.gnn = GCNZinc(input_dim=input_dim, embedding_dim=gnn_embed_dim)
-        self.embed_encodings = nn.Linear(encodings_dim, gnn_embed_dim)
-        self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
-
-        get_cross_attn = lambda: PreNorm(
-            latent_dim,
-            Attention(
-                latent_dim,
-                gnn_embed_dim,
-                heads=cross_heads,
-                dim_head=cross_dim_head,
-                dropout=attn_dropout,
-            ),
-            context_dim=gnn_embed_dim,
-        )
-        get_cross_ff = lambda: PreNorm(
-            latent_dim, FeedForward(latent_dim, dropout=ff_dropout)
-        )
         get_latent_attn = lambda: PreNorm(
             latent_dim,
             Attention(
@@ -291,35 +233,28 @@ class Perceiver(nn.Module):
             latent_dim, FeedForward(latent_dim, dropout=ff_dropout)
         )
 
-        get_cross_attn, get_cross_ff, get_latent_attn, get_latent_ff = map(
-            cache_fn, (get_cross_attn, get_cross_ff, get_latent_attn, get_latent_ff)
-        )
+        get_latent_attn, get_latent_ff = map(cache_fn, (get_latent_attn, get_latent_ff))
 
         self.layers = nn.ModuleList([])
         for i in range(depth):
             should_cache = i > 0 and weight_tie_layers
             cache_args = {"_cache": should_cache}
 
-            self_attns = nn.ModuleList([])
-
-            for _ in range(self_per_cross_attn):
-                self_attns.append(
-                    nn.ModuleList(
-                        [get_latent_attn(**cache_args), get_latent_ff(**cache_args)]
-                    )
-                )
-
             self.layers.append(
                 nn.ModuleList(
-                    [
-                        get_cross_attn(**cache_args),
-                        get_cross_ff(**cache_args),
-                        self_attns,
-                    ]
+                    [get_latent_attn(**cache_args), get_latent_ff(**cache_args)]
                 )
             )
 
-        self.deg_to_emb = torch.nn.Embedding(64, 256)
+        self.to_out = (
+            nn.Sequential(
+                Reduce("b n d -> b d", "mean"),
+                nn.LayerNorm(latent_dim),
+                nn.Linear(latent_dim, 1),
+            )
+            if final_head
+            else nn.Identity()
+        )
 
         self.to_out = (
             nn.Sequential(
@@ -333,45 +268,18 @@ class Perceiver(nn.Module):
 
         self.apply(lambda module: init_params(module, n_layers=depth))
 
-    def forward(self, batch, return_embeddings=False, training=True):
+    def forward(self, batch):
 
-        data = self.gnn(batch)
-
-        deg = False
-
-        data, mask = to_dense_batch(data, batch.batch, max_num_nodes=128)
-
-        if not deg:
-            lap, _ = to_dense_batch(batch.lap, batch.batch, max_num_nodes=128)
-
-            if training == True:
-                sign_flip = torch.rand(lap.size(-1)).to(lap.device)
-                sign_flip[sign_flip >= 0.5] = 1.0
-                sign_flip[sign_flip < 0.5] = -1.0
-                lap = lap * sign_flip.unsqueeze(0)
-
-            data += self.embed_encodings(lap)
-        else:
-            deg, _ = to_dense_batch(batch.deg, batch.batch, max_num_nodes=128)
-            deg = self.deg_to_emb(deg)
-            data += deg
-
-        b = data.shape[0]
-        x = repeat(self.latents, "n d -> b n d", b=b)
+        data, mask = to_dense_batch(batch.x, batch.batch, max_num_nodes=128)
+        data = self.atom_encoder(data.squeeze(-1))
+        x = data
 
         # layers
 
-        for cross_attn, cross_ff, self_attns in self.layers:
-            x = cross_attn(x, context=data, mask=mask) + x
-            x = cross_ff(x) + x
+        for self_attns in self.layers:
 
-            for self_attn, self_ff in self_attns:
-                x = self_attn(x) + x
-                x = self_ff(x) + x
-
-        # allow for fetching embeddings
-        if return_embeddings:
-            return x
+            x = self_attns[0](x, mask=mask) + x
+            x = self_attns[1](x) + x
 
         # to logits
         return self.to_out(x)

@@ -12,11 +12,14 @@ import numpy as np
 
 
 def preprocess_item(item, pos_enc_dim=8):
+
     item.lap = laplacian_positional_encoding(item, pos_enc_dim=pos_enc_dim)
     return item
 
 
 def preprocess_item_deg(item):
+
+    # indegree
     item.deg = degree(item.edge_index[1], dtype=int)
     return item
 
@@ -42,8 +45,9 @@ class MyGNNBenchmarkDataset(GNNBenchmarkDataset):
 
 
 class MyZINCDataset(ZINC):
-    def __init__(self, root, subset=False, split="train"):
+    def __init__(self, root, subset=False, split="train", encoding_type="lap"):
         super().__init__(root, subset=subset, split=split)
+        self.encoding_type = encoding_type
 
     def download(self):
         super(MyZINCDataset, self).download()
@@ -55,7 +59,13 @@ class MyZINCDataset(ZINC):
         if isinstance(idx, int):
             item = self.get(self.indices()[idx])
             item.idx = idx
-            return preprocess_item_deg(item)
+
+            item = (
+                preprocess_item(item)
+                if self.encoding_type != "deg"
+                else preprocess_item_deg(item)
+            )
+            return item
         else:
             return self.index_select(idx)
 

@@ -5,3 +5,4 @@ lightning_logs/
 *.pt
 nohup.out
 wandb/
+.vscode/

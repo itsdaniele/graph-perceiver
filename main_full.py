@@ -1,6 +1,5 @@
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint
-from model_regression import PerceiverRegressor
+from model_full import PerceiverRegressor
 
 from data import MyZINCDataset
 
@@ -20,20 +19,8 @@ def main():
     train_loader = DataLoader(zinc_train, batch_size=128, shuffle=True, num_workers=32)
     val_loader = DataLoader(zinc_val, batch_size=128, shuffle=False, num_workers=32)
 
-    # mc = ModelCheckpoint(
-    #     monitor="val/loss",
-    #     dirpath="./",
-    #     filename="zinc-{epoch:02d}-{val/loss:.2f}",
-    #     mode="min",
-    # )
-
     model = PerceiverRegressor(
-        input_channels=256,
-        depth=8,
-        attn_dropout=0.0,
-        ff_dropout=0.1,
-        weight_tie_layers=False,
-        encodings_dim=8,
+        depth=12, attn_dropout=0.0, ff_dropout=0.0, weight_tie_layers=False,
     )
 
     trainer = pl.Trainer(
