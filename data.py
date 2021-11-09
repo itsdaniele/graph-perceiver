@@ -11,6 +11,13 @@ from torch_geometric.utils import to_dense_adj, get_laplacian, degree
 import numpy as np
 
 
+def convert_to_single_emb(x, offset=512):
+    feature_num = x.size(1) if len(x.size()) > 1 else 1
+    feature_offset = 1 + torch.arange(0, feature_num * offset, offset, dtype=torch.long)
+    x = x + feature_offset
+    return x
+
+
 def preprocess_item(item, pos_enc_dim=8):
 
     item.lap = laplacian_positional_encoding(item, pos_enc_dim=pos_enc_dim)
@@ -20,7 +27,8 @@ def preprocess_item(item, pos_enc_dim=8):
 def preprocess_item_deg(item):
 
     # indegree
-    item.deg = degree(item.edge_index[1], dtype=int)
+    item.indeg = degree(item.edge_index[1], dtype=int)
+    item.outdeg = degree(item.edge_index[0], dtype=int)
     return item
 
 

@@ -20,7 +20,7 @@ def main():
     val_loader = DataLoader(zinc_val, batch_size=128, shuffle=False, num_workers=32)
 
     model = PerceiverRegressor(
-        depth=12, attn_dropout=0.0, ff_dropout=0.0, weight_tie_layers=False,
+        depth=12, attn_dropout=0.1, ff_dropout=0.1, weight_tie_layers=False,
     )
 
     trainer = pl.Trainer(

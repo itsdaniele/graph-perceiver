@@ -11,7 +11,48 @@ import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
 
-from torch_geometric.utils import to_dense_batch
+from torch_geometric.utils import to_dense_batch, to_dense_adj
+
+from torch.optim.lr_scheduler import _LRScheduler
+
+
+class PolynomialDecayLR(_LRScheduler):
+    def __init__(
+        self,
+        optimizer,
+        warmup_updates,
+        tot_updates,
+        lr,
+        end_lr,
+        power,
+        last_epoch=-1,
+        verbose=False,
+    ):
+        self.warmup_updates = warmup_updates
+        self.tot_updates = tot_updates
+        self.lr = lr
+        self.end_lr = end_lr
+        self.power = power
+        super(PolynomialDecayLR, self).__init__(optimizer, last_epoch, verbose)
+
+    def get_lr(self):
+        if self._step_count <= self.warmup_updates:
+            self.warmup_factor = self._step_count / float(self.warmup_updates)
+            lr = self.warmup_factor * self.lr
+        elif self._step_count >= self.tot_updates:
+            lr = self.end_lr
+        else:
+            warmup = self.warmup_updates
+            lr_range = self.lr - self.end_lr
+            pct_remaining = 1 - (self._step_count - warmup) / (
+                self.tot_updates - warmup
+            )
+            lr = lr_range * pct_remaining ** (self.power) + self.end_lr
+
+        return [lr for group in self.optimizer.param_groups]
+
+    def _get_closed_form_lr(self):
+        assert False
 
 
 class PerceiverRegressor(pl.LightningModule):
@@ -61,8 +102,22 @@ class PerceiverRegressor(pl.LightningModule):
         return self.evaluate(batch, "test")
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=2e-4)
-        return [optimizer]
+        optimizer = torch.optim.AdamW(self.parameters(), lr=2e-4, weight_decay=0.01)
+
+        scheduler = {
+            "scheduler": PolynomialDecayLR(
+                optimizer,
+                warmup_updates=60000,
+                tot_updates=1000000,
+                lr=2e-4,
+                end_lr=1e-9,
+                power=1.0,
+            ),
+            "name": "learning_rate",
+            "interval": "step",
+            "frequency": 1,
+        }
+        return [optimizer], [scheduler]
 
 
 def exists(val):
@@ -112,15 +167,14 @@ class PreNorm(nn.Module):
 
 class GEGLU(nn.Module):
     def forward(self, x):
-        x, gates = x.chunk(2, dim=-1)
-        return x * F.gelu(gates)
+        return F.gelu(x)
 
 
 class FeedForward(nn.Module):
     def __init__(self, dim, mult=2, dropout=0.0):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(dim, dim * mult * 2),
+            nn.Linear(dim, dim * mult),
             GEGLU(),
             nn.Dropout(dropout),
             nn.Linear(dim * mult, dim),
@@ -146,7 +200,7 @@ class Attention(nn.Module):
             nn.Linear(inner_dim, query_dim), nn.Dropout(dropout)
         )
 
-    def forward(self, x, context=None, mask=None):
+    def forward(self, x, context=None, mask=None, bias=None):
         h = self.heads
 
         q = self.to_q(x)
@@ -156,6 +210,10 @@ class Attention(nn.Module):
         q, k, v = map(lambda t: rearrange(t, "b n (h d) -> (b h) n d", h=h), (q, k, v))
 
         sim = einsum("b i d, b j d -> b i j", q, k) * self.scale
+
+        if bias is not None:
+            bias = repeat(bias, "b n d -> (repeat b) n d", repeat=h)
+            sim += bias
 
         if exists(mask):
             mask = rearrange(mask, "b ... -> b (...)")
@@ -217,7 +275,7 @@ class Perceiver(nn.Module):
         """
         super().__init__()
 
-        self.atom_encoder = nn.Embedding(64, latent_dim)
+        self.atom_encoder = nn.Embedding(64, latent_dim, padding_idx=63)
         self.edge_encoder = nn.Embedding(64, 1)
 
         get_latent_attn = lambda: PreNorm(
@@ -256,29 +314,30 @@ class Perceiver(nn.Module):
             else nn.Identity()
         )
 
-        self.to_out = (
-            nn.Sequential(
-                Reduce("b n d -> b d", "mean"),
-                nn.LayerNorm(latent_dim),
-                nn.Linear(latent_dim, 1),
-            )
-            if final_head
-            else nn.Identity()
-        )
+        self.embed_encodings = nn.Linear(8, latent_dim)
 
         self.apply(lambda module: init_params(module, n_layers=depth))
 
     def forward(self, batch):
 
-        data, mask = to_dense_batch(batch.x, batch.batch, max_num_nodes=128)
+        data, mask = to_dense_batch(
+            batch.x, batch.batch, max_num_nodes=128, fill_value=63
+        )
+        lap, _ = to_dense_batch(batch.lap, batch.batch, max_num_nodes=128)
+
+        edge_attr = self.edge_encoder(
+            to_dense_adj(
+                batch.edge_index, batch.batch, batch.edge_attr, max_num_nodes=128
+            )
+        ).squeeze(-1)
         data = self.atom_encoder(data.squeeze(-1))
-        x = data
+        x = data + self.embed_encodings(lap).squeeze(-1)
 
         # layers
 
         for self_attns in self.layers:
 
-            x = self_attns[0](x, mask=mask) + x
+            x = self_attns[0](x, mask=mask, bias=edge_attr) + x
             x = self_attns[1](x) + x
 
         # to logits
