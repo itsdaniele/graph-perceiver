@@ -13,37 +13,45 @@ import torch
 import torch.nn.functional as F
 
 from torch_geometric.nn import GCNConv
+from torch_geometric.nn.conv.x_conv import XConv
+from torch_geometric.utils import to_dense_batch
+
 import torchmetrics
 
 
-class GCNCora(torch.nn.Module):
-    def __init__(self, input_dim=1433, embed_dim=16):
+class GCNZinc(torch.nn.Module):
+    def __init__(self, input_dim=6, embed_dim=256):
         super().__init__()
-        self.conv1 = GCNConv(input_dim, embed_dim, cached=True)
+        self.emb = torch.nn.Linear(input_dim, embed_dim)
+        self.conv1 = GCNConv(embed_dim, embed_dim)
+        self.conv2 = GCNConv(embed_dim, embed_dim)
+        self.conv3 = GCNConv(embed_dim, embed_dim)
 
     def forward(self, data):
-        x = F.relu(self.conv1(data.x, data.edge_index))
+        x, edge_index = data.x, data.edge_index
+        x = self.emb(x)
+        x = F.relu(self.conv1(x, edge_index,)) + x
+        x = F.relu(self.conv2(x, edge_index,)) + x
+        x = F.relu(self.conv3(x, edge_index,)) + x
         return x
 
 
-class PerceiverIOClassifier(pl.LightningModule):
+class PerceiverClassifier(pl.LightningModule):
     def __init__(
         self,
         queries_dim=None,
-        gnn_embed_dim=16,
+        input_channels=6,
+        gnn_embed_dim=256,
         depth=6,
-        num_latents=8,
-        latent_dim=8,
+        num_latents=64,
+        latent_dim=32,
         cross_heads=4,
         latent_heads=4,
-        cross_dim_head=16,
-        latent_dim_head=16,
-        logits_dim=7,
+        cross_dim_head=32,
+        latent_dim_head=32,
+        logits_dim=6,
         pos_emb_dim=32,
         decoder_ff=True,
-        attn_dropout=0.0,
-        ff_dropout=0.1,
-        weight_tie_layers=True,
     ):
         super().__init__()
 
@@ -51,7 +59,8 @@ class PerceiverIOClassifier(pl.LightningModule):
 
         queries_dim = gnn_embed_dim
 
-        self.perceiver = PerceiverIO(
+        self.perceiver = Perceiver(
+            input_channels=input_channels,
             gnn_embed_dim=gnn_embed_dim,
             queries_dim=queries_dim,
             depth=depth,
@@ -64,18 +73,15 @@ class PerceiverIOClassifier(pl.LightningModule):
             logits_dim=logits_dim,
             pos_emb_dim=pos_emb_dim,
             decoder_ff=decoder_ff,
-            weight_tie_layers=weight_tie_layers,
-            attn_dropout=attn_dropout,
-            ff_dropout=ff_dropout,
         )
 
     def forward(self, x, **kwargs):
-        return self.perceiver(x, queries=None, **kwargs)
+        return self.perceiver(x, queries=x, **kwargs)
 
     def training_step(self, batch, batch_idx):
-        y_hat = self(batch)[:, batch.train_mask].transpose(1, 2)
-        y = batch.y[batch.train_mask].unsqueeze(0)
-        loss = F.nll_loss(y_hat, y)
+        y_hat = self(batch).transpose(1, 2)
+        y = to_dense_batch(batch.y, batch.batch, fill_value=99, max_num_nodes=190)[0]
+        loss = F.cross_entropy(y_hat, y, ignore_index=99)
 
         acc = torchmetrics.functional.accuracy(torch.argmax(y_hat, dim=-2), y)
         self.log("train/acc", acc)
@@ -84,10 +90,9 @@ class PerceiverIOClassifier(pl.LightningModule):
         return loss
 
     def evaluate(self, batch, stage=None):
-        y_hat = self(batch)[:, batch.val_mask].transpose(1, 2)
-
-        y = batch.y[batch.val_mask].unsqueeze(0)
-        loss = F.nll_loss(y_hat, y)
+        y_hat = self(batch).transpose(1, 2)
+        y = to_dense_batch(batch.y, batch.batch, fill_value=99, max_num_nodes=190)[0]
+        loss = F.cross_entropy(y_hat, y, ignore_index=99)
 
         acc = torchmetrics.functional.accuracy(torch.argmax(y_hat, dim=-2), y)
         self.log("val/acc", acc)
@@ -97,15 +102,12 @@ class PerceiverIOClassifier(pl.LightningModule):
         return self.evaluate(batch, "val")
 
     def test_step(self, batch, batch_idx):
-        y_hat = self(batch)[:, batch.test_mask].transpose(1, 2)
-        y = batch.y[batch.test_mask].unsqueeze(0)
-
-        acc = torchmetrics.functional.accuracy(torch.argmax(y_hat, dim=-2), y)
-        self.log("test/acc", acc)
-        return acc
+        return self.evaluate(batch, "test")
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=0.01)
+        optimizer = torch.optim.Adam(self.parameters(), lr=0.001)
+        # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
+        # torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
         return [optimizer]
 
 
@@ -222,25 +224,24 @@ class Attention(nn.Module):
 # main class
 
 
-class PerceiverIO(nn.Module):
+class Perceiver(nn.Module):
     def __init__(
         self,
         *,
         depth,
         queries_dim,
-        gnn_embed_dim,
-        logits_dim,
-        num_latents,
-        latent_dim,
-        cross_heads,
-        latent_heads,
-        cross_dim_head,
-        latent_dim_head,
-        pos_emb_dim,
-        weight_tie_layers,
-        decoder_ff,
-        attn_dropout,
-        ff_dropout,
+        input_channels=3,
+        gnn_embed_dim=256,
+        logits_dim=None,
+        num_latents=512,
+        latent_dim=512,
+        cross_heads=1,
+        latent_heads=8,
+        cross_dim_head=64,
+        latent_dim_head=64,
+        pos_emb_dim=32,
+        weight_tie_layers=False,
+        decoder_ff=False
     ):
         """The shape of the final attention mechanism will be:
         depth * (cross attention -> self_per_cross_attn * self attention)
@@ -263,9 +264,10 @@ class PerceiverIO(nn.Module):
         """
         super().__init__()
 
+        input_dim = input_channels
         self.embed_encoding = nn.Linear(pos_emb_dim, gnn_embed_dim)
 
-        self.gnn = GCNCora(embed_dim=gnn_embed_dim)
+        self.gnn = GCNZinc(input_dim=input_dim, embed_dim=gnn_embed_dim)
         self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
 
         self.cross_attend_blocks = nn.ModuleList(
@@ -277,32 +279,24 @@ class PerceiverIO(nn.Module):
                         gnn_embed_dim,
                         heads=cross_heads,
                         dim_head=cross_dim_head,
-                        dropout=attn_dropout,
                     ),
                     context_dim=gnn_embed_dim,
                 ),
-                PreNorm(latent_dim, FeedForward(latent_dim, dropout=ff_dropout)),
+                PreNorm(latent_dim, FeedForward(latent_dim)),
             ]
         )
 
         get_latent_attn = lambda: PreNorm(
             latent_dim,
-            Attention(
-                latent_dim,
-                heads=latent_heads,
-                dim_head=latent_dim_head,
-                dropout=attn_dropout,
-            ),
+            Attention(latent_dim, heads=latent_heads, dim_head=latent_dim_head),
         )
-        get_latent_ff = lambda: PreNorm(
-            latent_dim, FeedForward(latent_dim, dropout=ff_dropout)
-        )
+        get_latent_ff = lambda: PreNorm(latent_dim, FeedForward(latent_dim))
         get_latent_attn, get_latent_ff = map(cache_fn, (get_latent_attn, get_latent_ff))
 
         self.layers = nn.ModuleList([])
         cache_args = {"_cache": weight_tie_layers}
 
-        for _ in range(depth):
+        for i in range(depth):
             self.layers.append(
                 nn.ModuleList(
                     [get_latent_attn(**cache_args), get_latent_ff(**cache_args)]
@@ -312,58 +306,44 @@ class PerceiverIO(nn.Module):
         self.decoder_cross_attn = PreNorm(
             queries_dim,
             Attention(
-                queries_dim,
-                latent_dim,
-                heads=cross_heads,
-                dim_head=cross_dim_head,
-                dropout=attn_dropout,
+                queries_dim, latent_dim, heads=cross_heads, dim_head=cross_dim_head
             ),
             context_dim=latent_dim,
         )
         self.decoder_ff = (
-            PreNorm(queries_dim, FeedForward(queries_dim, dropout=ff_dropout))
-            if decoder_ff
-            else None
+            PreNorm(queries_dim, FeedForward(queries_dim)) if decoder_ff else None
         )
 
         self.to_logits = (
             nn.Linear(queries_dim, logits_dim) if exists(logits_dim) else nn.Identity()
         )
 
-        self.in_degree_encoder = nn.Embedding(1024, 8)
-        self.out_degree_encoder = nn.Embedding(1024, 8)
-
-        self.lap_encoder = nn.Linear(32, 16)
-
     def forward(self, batch, mask=None, queries=None):
 
-        # data = (
-        #     self.gnn(batch)
-        #     + self.in_degree_encoder(batch.indeg)
-        #     + self.out_degree_encoder(batch.outdeg)
-        # ).unsqueeze(0)
+        data = self.gnn(batch)
 
-        if self.training:
-            batch_lap_pos_enc = batch.lap
-            sign_flip = torch.rand(batch_lap_pos_enc.size(0)).to(batch.lap.device)
-            sign_flip[sign_flip >= 0.5] = 1.0
-            sign_flip[sign_flip < 0.5] = -1.0
-            lap = batch_lap_pos_enc * sign_flip.unsqueeze(1)
-        else:
-            lap = batch.lap
-        data = (self.gnn(batch) + self.lap_encoder(lap)).unsqueeze(0)
+        data, mask = to_dense_batch(data, batch.batch, max_num_nodes=190)
+        lap, _ = to_dense_batch(batch.lap, batch.batch, max_num_nodes=190)
 
-        if queries is None:
-            queries = data.clone()
+        sign_flip = torch.rand(lap.size(-1)).to(lap.device)
+        sign_flip[sign_flip >= 0.5] = 1.0
+        sign_flip[sign_flip < 0.5] = -1.0
+        lap = lap * sign_flip.unsqueeze(0)
+
+        lap = self.embed_encoding(lap)
+
+        data = data + lap
+        queries = data
 
         b = data.shape[0]
+
         x = repeat(self.latents, "n d -> b n d", b=b)
 
         cross_attn, cross_ff = self.cross_attend_blocks
 
         # cross attention only happens once for Perceiver IO
 
-        x = cross_attn(x, context=data) + x
+        x = cross_attn(x, context=data, mask=mask) + x
         x = cross_ff(x) + x
 
         # layers
@@ -382,7 +362,9 @@ class PerceiverIO(nn.Module):
 
         # cross attend from decoder queries to latents
 
-        latents = self.decoder_cross_attn(queries, context=x)
+        latents = self.decoder_cross_attn(
+            data, context=x, mask=mask, is_query_mask=True
+        )
 
         # optional decoder feedforward
 
@@ -390,5 +372,5 @@ class PerceiverIO(nn.Module):
             latents = latents + self.decoder_ff(latents)
 
         # final linear out
-        logits = self.to_logits(latents)
-        return F.log_softmax(logits, dim=-1)
+
+        return self.to_logits(latents)

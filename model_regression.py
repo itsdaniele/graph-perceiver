@@ -11,26 +11,26 @@ import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
 
-from torch_geometric.nn import GCNConv
+from torch_geometric.nn import RGCNConv, FiLMConv
 from torch_geometric.utils import to_dense_batch
+
+from lr import PolynomialDecayLR
 
 
 class GCNZinc(torch.nn.Module):
-    def __init__(self, input_dim=64, embedding_dim=256):
+    def __init__(self, input_dim=64, embedding_dim=128):
         super().__init__()
         self.emb = torch.nn.Embedding(input_dim, embedding_dim)
-        self.edge_emb = torch.nn.Embedding(64, 1)
-        self.conv1 = GCNConv(embedding_dim, embedding_dim)
-        self.conv2 = GCNConv(embedding_dim, embedding_dim)
-        self.conv3 = GCNConv(embedding_dim, embedding_dim)
+        self.conv1 = RGCNConv(embedding_dim, embedding_dim, num_relations=4)
+        self.conv2 = RGCNConv(embedding_dim, embedding_dim, num_relations=4)
+        self.conv3 = RGCNConv(embedding_dim, embedding_dim, num_relations=4)
 
     def forward(self, data):
         x, edge_index, edge_weight = data.x, data.edge_index, data.edge_attr
-        edge_weight = self.edge_emb(edge_weight).squeeze(-1)
-        x = self.emb(x.squeeze(-1))
-        x = F.relu(self.conv1(x, edge_index, edge_weight)) + x
-        x = F.relu(self.conv2(x, edge_index, edge_weight)) + x
-        x = F.relu(self.conv3(x, edge_index, edge_weight)) + x
+        x1 = self.emb(x.squeeze(-1))
+        x = F.relu(self.conv1(x1, edge_index, edge_weight))
+        x = F.relu(self.conv2(x, edge_index, edge_weight))
+        x = F.relu(self.conv3(x, edge_index, edge_weight)) + x1
         return x
 
 
@@ -38,19 +38,20 @@ class PerceiverRegressor(pl.LightningModule):
     def __init__(
         self,
         input_channels=3,
-        gnn_embed_dim=256,
+        gnn_embed_dim=128,
         depth=6,
-        num_latents=128,
+        num_latents=16,
         latent_dim=32,
         cross_heads=4,
         latent_heads=4,
-        cross_dim_head=32,
-        latent_dim_head=32,
+        cross_dim_head=16,
+        latent_dim_head=16,
         attn_dropout=0.0,
         ff_dropout=0.0,
         weight_tie_layers=False,
-        self_per_cross_attn=2,
-        encodings_dim=8,
+        self_per_cross_attn=1,
+        lap_encodings_dim=8,
+        encoding_type="lap",
     ):
         super().__init__()
 
@@ -70,7 +71,8 @@ class PerceiverRegressor(pl.LightningModule):
             ff_dropout=ff_dropout,
             weight_tie_layers=weight_tie_layers,
             self_per_cross_attn=self_per_cross_attn,
-            encodings_dim=encodings_dim,
+            lap_encodings_dim=lap_encodings_dim,
+            encoding_type=encoding_type,
         )
 
     def forward(self, x, **kwargs):
@@ -95,8 +97,22 @@ class PerceiverRegressor(pl.LightningModule):
         return self.evaluate(batch, "test")
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=0.003)
-        return [optimizer]
+        optimizer = torch.optim.AdamW(self.parameters(), lr=2e-4, weight_decay=0.01)
+
+        lr_scheduler = {
+            "scheduler": PolynomialDecayLR(
+                optimizer,
+                warmup_updates=40000,
+                tot_updates=400000,
+                lr=2e-4,
+                end_lr=1e-9,
+                power=1.0,
+            ),
+            "name": "learning_rate",
+            "interval": "step",
+            "frequency": 1,
+        }
+        return [optimizer], [lr_scheduler]
 
 
 def exists(val):
@@ -235,7 +251,8 @@ class Perceiver(nn.Module):
         weight_tie_layers=False,
         self_per_cross_attn=1,
         final_head=True,
-        encodings_dim=8,
+        lap_encodings_dim=8,
+        encoding_type="lap"
     ):
         """The shape of the final attention mechanism will be:
         depth * (cross attention -> self_per_cross_attn * self attention)
@@ -259,9 +276,15 @@ class Perceiver(nn.Module):
         super().__init__()
 
         input_dim = input_channels
+        self.encoding_type = encoding_type
 
         self.gnn = GCNZinc(input_dim=input_dim, embedding_dim=gnn_embed_dim)
-        self.embed_encodings = nn.Linear(encodings_dim, gnn_embed_dim)
+
+        if self.encoding_type == "lap":
+            self.embed_encodings = nn.Linear(lap_encodings_dim, gnn_embed_dim)
+        else:
+            self.indeg_to_emb = torch.nn.Embedding(65, gnn_embed_dim, padding_idx=64)
+            self.outdeg_to_emb = torch.nn.Embedding(65, gnn_embed_dim, padding_idx=64)
         self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
 
         get_cross_attn = lambda: PreNorm(
@@ -319,8 +342,6 @@ class Perceiver(nn.Module):
                 )
             )
 
-        self.deg_to_emb = torch.nn.Embedding(64, 256)
-
         self.to_out = (
             nn.Sequential(
                 Reduce("b n d -> b d", "mean"),
@@ -331,17 +352,17 @@ class Perceiver(nn.Module):
             else nn.Identity()
         )
 
+        self.final_virtual = nn.Linear(latent_dim, 1)
+
         self.apply(lambda module: init_params(module, n_layers=depth))
 
     def forward(self, batch, return_embeddings=False, training=True):
 
         data = self.gnn(batch)
 
-        deg = False
-
         data, mask = to_dense_batch(data, batch.batch, max_num_nodes=128)
 
-        if not deg:
+        if self.encoding_type == "lap":
             lap, _ = to_dense_batch(batch.lap, batch.batch, max_num_nodes=128)
 
             if training == True:
@@ -352,9 +373,15 @@ class Perceiver(nn.Module):
 
             data += self.embed_encodings(lap)
         else:
-            deg, _ = to_dense_batch(batch.deg, batch.batch, max_num_nodes=128)
-            deg = self.deg_to_emb(deg)
-            data += deg
+            indeg, _ = to_dense_batch(
+                batch.indeg, batch.batch, max_num_nodes=128, fill_value=64
+            )
+            outdeg, _ = to_dense_batch(
+                batch.outdeg, batch.batch, max_num_nodes=128, fill_value=64
+            )
+            indeg = self.indeg_to_emb(indeg)
+            outdeg = self.outdeg_to_emb(outdeg)
+            data += indeg + outdeg
 
         b = data.shape[0]
         x = repeat(self.latents, "n d -> b n d", b=b)
@@ -374,4 +401,5 @@ class Perceiver(nn.Module):
             return x
 
         # to logits
-        return self.to_out(x)
+        return self.final_virtual(x[:, 0, :])
+

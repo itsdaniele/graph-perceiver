@@ -1,24 +1,11 @@
-from torch_geometric.datasets import ZINC, GNNBenchmarkDataset
+from torch_geometric.datasets import ZINC, GNNBenchmarkDataset, Planetoid
 import torch
-import torch.nn.functional as F
-import pickle
-import scipy as sp
-
-from scipy import sparse as sp
-
 
 from torch_geometric.utils import to_dense_adj, get_laplacian, degree
 import numpy as np
 
 
-def convert_to_single_emb(x, offset=512):
-    feature_num = x.size(1) if len(x.size()) > 1 else 1
-    feature_offset = 1 + torch.arange(0, feature_num * offset, offset, dtype=torch.long)
-    x = x + feature_offset
-    return x
-
-
-def preprocess_item(item, pos_enc_dim=8):
+def preprocess_item(item, pos_enc_dim=32):
 
     item.lap = laplacian_positional_encoding(item, pos_enc_dim=pos_enc_dim)
     return item
@@ -78,6 +65,31 @@ class MyZINCDataset(ZINC):
             return self.index_select(idx)
 
 
+class MyCoraDataset(Planetoid):
+    def __init__(self, root, name="Cora", encoding="deg"):
+        super().__init__(root, name=name)
+        self.encoding = encoding
+        self.data.lap = laplacian_positional_encoding(self.data, pos_enc_dim=32)
+
+    def download(self):
+        super(Planetoid, self).download()
+
+    def process(self):
+        super(Planetoid, self).process()
+
+    def __getitem__(self, idx):
+        if isinstance(idx, int):
+            item = self.get(self.indices()[idx])
+            item.idx = idx
+
+            if self.encoding == "deg":
+                return preprocess_item_deg(item)
+            else:
+                return item
+        else:
+            return self.index_select(idx)
+
+
 def pad_2d_unsqueeze(x, padlen):
     x = x + 1  # pad id = 0
     xlen, xdim = x.size()
@@ -97,7 +109,7 @@ def laplacian_positional_encoding(data, pos_enc_dim=8):
         get_laplacian(data.edge_index, normalization="sym", dtype=torch.float)[0]
     ).squeeze(0)
     # Eigenvectors with numpy
-    EigVal, EigVec = np.linalg.eig(L)
+    EigVal, EigVec = np.linalg.eig(L.numpy())
     idx = EigVal.argsort()  # increasing order
     EigVec = np.real(EigVec[:, idx])
     return torch.from_numpy(EigVec[:, 1 : pos_enc_dim + 1]).float()

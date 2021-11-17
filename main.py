@@ -14,11 +14,15 @@ def main():
 
     pl.seed_everything(42)
 
-    zinc_train = MyZINCDataset(root="./data", subset=True, split="train")
-    zinc_val = MyZINCDataset(root="./data", subset=True, split="val")
+    zinc_train = MyZINCDataset(
+        root="./data", subset=True, split="train", encoding_type="deg"
+    )
+    zinc_val = MyZINCDataset(
+        root="./data", subset=True, split="val", encoding_type="deg"
+    )
 
-    train_loader = DataLoader(zinc_train, batch_size=128, shuffle=True, num_workers=32)
-    val_loader = DataLoader(zinc_val, batch_size=128, shuffle=False, num_workers=32)
+    train_loader = DataLoader(zinc_train, batch_size=128, shuffle=True, num_workers=0)
+    val_loader = DataLoader(zinc_val, batch_size=128, shuffle=False, num_workers=0)
 
     # mc = ModelCheckpoint(
     #     monitor="val/loss",
@@ -28,12 +32,13 @@ def main():
     # )
 
     model = PerceiverRegressor(
-        input_channels=256,
-        depth=8,
+        input_channels=64,
+        depth=6,
         attn_dropout=0.0,
         ff_dropout=0.1,
         weight_tie_layers=False,
-        encodings_dim=8,
+        lap_encodings_dim=8,
+        encoding_type="deg",
     )
 
     trainer = pl.Trainer(
