@@ -13,9 +13,9 @@ def preprocess_item_lap(item, pos_enc_dim=32):
 
 def preprocess_item_deg(item):
 
-    # indegree
-    item.indeg = degree(item.edge_index[1], dtype=int)
-    item.outdeg = degree(item.edge_index[0], dtype=int)
+    # +1 so 0 is for padding
+    item.indeg = degree(item.edge_index[1], dtype=int) + 1
+    item.outdeg = degree(item.edge_index[0], dtype=int) + 1
     return item
 
 
@@ -71,10 +71,10 @@ class MyCoraDataset(Planetoid):
         self.encoding = encoding
         # self.data.lap = laplacian_positional_encoding(self.data, pos_enc_dim=32)
 
-        self.data.indeg = (
-            degree(self.data.edge_index[1], dtype=int) + 1
+        self.data.indeg = degree(
+            self.data.edge_index[1], dtype=int
         )  # add 1 so 0 is for padding
-        self.data.outdeg = degree(self.data.edge_index[0], dtype=int) + 1
+        self.data.outdeg = degree(self.data.edge_index[0], dtype=int)
 
     def download(self):
         super(MyCoraDataset, self).download()

@@ -198,9 +198,12 @@ class Perceiver(nn.Module):
 
         if self.encoding_type == "lap":
             self.embed_encodings = nn.Linear(lap_encodings_dim, gnn_embed_dim)
-        else:
+        elif self.encoding_type == "deg":
             self.indeg_to_emb = torch.nn.Embedding(64, gnn_embed_dim, padding_idx=0)
             self.outdeg_to_emb = torch.nn.Embedding(64, gnn_embed_dim, padding_idx=0)
+
+        else:
+            raise NotImplementedError
         self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
 
         get_cross_attn = lambda: PreNorm(
