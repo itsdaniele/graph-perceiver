@@ -19,7 +19,7 @@ import torch.nn.functional as F
 from torch_geometric.nn import GCNConv, GATConv
 from torch_geometric.utils import to_dense_batch
 
-import torch_optimizer as optim
+# import torch_optimizer as optim
 
 
 class GCNZinc(torch.nn.Module):

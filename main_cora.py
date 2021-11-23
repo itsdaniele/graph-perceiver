@@ -14,11 +14,11 @@ wandb_logger = WandbLogger(project="graph-perceiver")
 
 def main():
 
-    dataset = MyCoraDataset(root="../data/Cora", name="Cora", encoding="lap")
+    dataset = MyCoraDataset(root="../data/PubMed", name="PubMed", encoding="deg")
 
-    loader = DataLoader(dataset, num_workers=32)
+    loader = DataLoader(dataset, batch_size=1, num_workers=32)
 
-    model = PerceiverIOClassifier(depth=1)
+    model = PerceiverIOClassifier(depth=8)
     trainer = pl.Trainer(
         gpus=1, max_epochs=200, log_every_n_steps=1, logger=wandb_logger
     )

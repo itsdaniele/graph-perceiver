@@ -17,12 +17,14 @@ import torchmetrics
 
 
 class GCNCora(torch.nn.Module):
-    def __init__(self, input_dim=1433, embed_dim=16):
+    def __init__(self, input_dim=500, embed_dim=16):
         super().__init__()
-        self.conv1 = GCNConv(input_dim, embed_dim, cached=True)
+        self.conv1 = GCNConv(input_dim, embed_dim)
+        self.conv2 = GCNConv(embed_dim, embed_dim)
 
     def forward(self, data):
         x = F.relu(self.conv1(data.x, data.edge_index))
+        x = self.conv2(x, data.edge_index)
         return x
 
 
@@ -30,20 +32,19 @@ class PerceiverIOClassifier(pl.LightningModule):
     def __init__(
         self,
         queries_dim=None,
-        gnn_embed_dim=16,
+        gnn_embed_dim=64,
         depth=6,
         num_latents=8,
-        latent_dim=8,
-        cross_heads=4,
-        latent_heads=4,
+        latent_dim=32,
+        cross_heads=8,
+        latent_heads=8,
         cross_dim_head=16,
         latent_dim_head=16,
-        logits_dim=7,
-        pos_emb_dim=32,
+        logits_dim=3,
         decoder_ff=True,
         attn_dropout=0.0,
         ff_dropout=0.1,
-        weight_tie_layers=True,
+        weight_tie_layers=False,
     ):
         super().__init__()
 
@@ -62,7 +63,6 @@ class PerceiverIOClassifier(pl.LightningModule):
             cross_dim_head=cross_dim_head,
             latent_dim_head=latent_dim_head,
             logits_dim=logits_dim,
-            pos_emb_dim=pos_emb_dim,
             decoder_ff=decoder_ff,
             weight_tie_layers=weight_tie_layers,
             attn_dropout=attn_dropout,
@@ -75,7 +75,7 @@ class PerceiverIOClassifier(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         y_hat = self(batch)[:, batch.train_mask].transpose(1, 2)
         y = batch.y[batch.train_mask].unsqueeze(0)
-        loss = F.nll_loss(y_hat, y)
+        loss = F.cross_entropy(y_hat, y)
 
         acc = torchmetrics.functional.accuracy(torch.argmax(y_hat, dim=-2), y)
         self.log("train/acc", acc)
@@ -87,7 +87,7 @@ class PerceiverIOClassifier(pl.LightningModule):
         y_hat = self(batch)[:, batch.val_mask].transpose(1, 2)
 
         y = batch.y[batch.val_mask].unsqueeze(0)
-        loss = F.nll_loss(y_hat, y)
+        loss = F.cross_entropy(y_hat, y)
 
         acc = torchmetrics.functional.accuracy(torch.argmax(y_hat, dim=-2), y)
         self.log("val/acc", acc)
@@ -105,7 +105,7 @@ class PerceiverIOClassifier(pl.LightningModule):
         return acc
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=0.01)
+        optimizer = torch.optim.Adam(self.parameters(), lr=0.003)
         return [optimizer]
 
 
@@ -236,7 +236,6 @@ class PerceiverIO(nn.Module):
         latent_heads,
         cross_dim_head,
         latent_dim_head,
-        pos_emb_dim,
         weight_tie_layers,
         decoder_ff,
         attn_dropout,
@@ -263,8 +262,6 @@ class PerceiverIO(nn.Module):
         """
         super().__init__()
 
-        self.embed_encoding = nn.Linear(pos_emb_dim, gnn_embed_dim)
-
         self.gnn = GCNCora(embed_dim=gnn_embed_dim)
         self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
 
@@ -274,12 +271,12 @@ class PerceiverIO(nn.Module):
                     latent_dim,
                     Attention(
                         latent_dim,
-                        gnn_embed_dim,
+                        queries_dim,
                         heads=cross_heads,
                         dim_head=cross_dim_head,
                         dropout=attn_dropout,
                     ),
-                    context_dim=gnn_embed_dim,
+                    context_dim=queries_dim,
                 ),
                 PreNorm(latent_dim, FeedForward(latent_dim, dropout=ff_dropout)),
             ]
@@ -330,28 +327,30 @@ class PerceiverIO(nn.Module):
             nn.Linear(queries_dim, logits_dim) if exists(logits_dim) else nn.Identity()
         )
 
-        self.in_degree_encoder = nn.Embedding(1024, 8)
-        self.out_degree_encoder = nn.Embedding(1024, 8)
+        self.in_degree_encoder = nn.Embedding(256, gnn_embed_dim)
+        self.out_degree_encoder = nn.Embedding(256, gnn_embed_dim)
 
-        self.lap_encoder = nn.Linear(32, 16)
+        self.i = 0
+
+        # self.lap_encoder = nn.Linear(32, 16)
 
     def forward(self, batch, mask=None, queries=None):
 
-        # data = (
-        #     self.gnn(batch)
-        #     + self.in_degree_encoder(batch.indeg)
-        #     + self.out_degree_encoder(batch.outdeg)
-        # ).unsqueeze(0)
+        data = (
+            self.gnn(batch)
+            + self.in_degree_encoder(batch.indeg)
+            + self.out_degree_encoder(batch.outdeg)
+        ).unsqueeze(0)
 
-        if self.training:
-            batch_lap_pos_enc = batch.lap
-            sign_flip = torch.rand(batch_lap_pos_enc.size(0)).to(batch.lap.device)
-            sign_flip[sign_flip >= 0.5] = 1.0
-            sign_flip[sign_flip < 0.5] = -1.0
-            lap = batch_lap_pos_enc * sign_flip.unsqueeze(1)
-        else:
-            lap = batch.lap
-        data = (self.gnn(batch) + self.lap_encoder(lap)).unsqueeze(0)
+        # if self.training:
+        #     batch_lap_pos_enc = batch.lap
+        #     sign_flip = torch.rand(batch_lap_pos_enc.size(0)).to(batch.lap.device)
+        #     sign_flip[sign_flip >= 0.5] = 1.0
+        #     sign_flip[sign_flip < 0.5] = -1.0
+        #     lap = batch_lap_pos_enc * sign_flip.unsqueeze(1)
+        # else:
+        #     lap = batch.lap
+        # data = (self.gnn(batch) + self.lap_encoder(lap)).unsqueeze(0)
 
         if queries is None:
             queries = data.clone()
@@ -391,4 +390,6 @@ class PerceiverIO(nn.Module):
 
         # final linear out
         logits = self.to_logits(latents)
-        return F.log_softmax(logits, dim=-1)
+        return logits
+        # return F.log_softmax(logits, dim=-1)
+

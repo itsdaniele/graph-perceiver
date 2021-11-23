@@ -69,23 +69,23 @@ class MyCoraDataset(Planetoid):
     def __init__(self, root, name="Cora", encoding="deg"):
         super().__init__(root, name=name)
         self.encoding = encoding
-        self.data.lap = laplacian_positional_encoding(self.data, pos_enc_dim=32)
+        # self.data.lap = laplacian_positional_encoding(self.data, pos_enc_dim=32)
+
+        self.data.indeg = degree(self.data.edge_index[1], dtype=int)
+        self.data.outdeg = degree(self.data.edge_index[0], dtype=int)
 
     def download(self):
-        super(Planetoid, self).download()
+        super(MyCoraDataset, self).download()
 
     def process(self):
-        super(Planetoid, self).process()
+        super(MyCoraDataset, self).process()
 
     def __getitem__(self, idx):
         if isinstance(idx, int):
             item = self.get(self.indices()[idx])
             item.idx = idx
 
-            if self.encoding == "deg":
-                return preprocess_item_deg(item)
-            else:
-                return item
+            return item
         else:
             return self.index_select(idx)
 
