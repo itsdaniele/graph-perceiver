@@ -1,5 +1,5 @@
 import pytorch_lightning as pl
-from model_full import PerceiverRegressor
+from model.model_full import PerceiverRegressor
 
 from data import MyZINCDataset
 

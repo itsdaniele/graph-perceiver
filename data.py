@@ -5,7 +5,7 @@ from torch_geometric.utils import to_dense_adj, get_laplacian, degree
 import numpy as np
 
 
-def preprocess_item(item, pos_enc_dim=32):
+def preprocess_item_lap(item, pos_enc_dim=32):
 
     item.lap = laplacian_positional_encoding(item, pos_enc_dim=pos_enc_dim)
     return item
@@ -34,7 +34,7 @@ class MyGNNBenchmarkDataset(GNNBenchmarkDataset):
             item = self.get(self.indices()[idx])
             item.idx = idx
 
-            return preprocess_item(item, pos_enc_dim=32)
+            return preprocess_item_deg(item, pos_enc_dim=32)
         else:
             return self.index_select(idx)
 
@@ -56,7 +56,7 @@ class MyZINCDataset(ZINC):
             item.idx = idx
 
             item = (
-                preprocess_item(item)
+                preprocess_item_lap(item)
                 if self.encoding_type != "deg"
                 else preprocess_item_deg(item)
             )
@@ -71,8 +71,10 @@ class MyCoraDataset(Planetoid):
         self.encoding = encoding
         # self.data.lap = laplacian_positional_encoding(self.data, pos_enc_dim=32)
 
-        self.data.indeg = degree(self.data.edge_index[1], dtype=int)
-        self.data.outdeg = degree(self.data.edge_index[0], dtype=int)
+        self.data.indeg = (
+            degree(self.data.edge_index[1], dtype=int) + 1
+        )  # add 1 so 0 is for padding
+        self.data.outdeg = degree(self.data.edge_index[0], dtype=int) + 1
 
     def download(self):
         super(MyCoraDataset, self).download()

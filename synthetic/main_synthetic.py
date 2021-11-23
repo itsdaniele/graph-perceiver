@@ -1,10 +1,5 @@
 import pytorch_lightning as pl
-import torch
-from pytorch_lightning.callbacks import ModelCheckpoint
 from model_synthetic import PerceiverRegressor
-
-from data import MyZINCDataset
-from torch_geometric.datasets import Planetoid
 
 from torch_geometric.data import DataLoader
 
@@ -79,7 +74,7 @@ def main():
         log_gpu_memory=True,
         max_epochs=10000,
         progress_bar_refresh_rate=5,
-        logger=wandb_logger,
+        # logger=wandb_logger,
     )
     trainer.fit(model, train_loader, val_loader)
     # trainer.test(test_dataloaders=test_loader)

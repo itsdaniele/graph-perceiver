@@ -1,5 +1,5 @@
 import pytorch_lightning as pl
-from perceiver_io import PerceiverIOClassifier
+from perceiverio import PerceiverIO
 
 from data import MyCoraDataset
 
