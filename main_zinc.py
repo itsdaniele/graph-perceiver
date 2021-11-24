@@ -1,4 +1,5 @@
 import pytorch_lightning as pl
+from pytorch_lightning import callbacks
 from pytorch_lightning.callbacks import ModelCheckpoint
 from model.regressor import PerceiverRegressor
 
@@ -6,8 +7,13 @@ from data import MyZINCDataset
 
 from torch_geometric.data import DataLoader
 from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.callbacks import LearningRateMonitor
 
 wandb_logger = WandbLogger(project="graph-perceiver")
+
+import torch
+
+torch.multiprocessing.set_sharing_strategy("file_system")
 
 
 def main():
@@ -21,8 +27,8 @@ def main():
         root="./data", subset=True, split="val", encoding_type="deg"
     )
 
-    train_loader = DataLoader(zinc_train, batch_size=128, shuffle=True, num_workers=0)
-    val_loader = DataLoader(zinc_val, batch_size=128, shuffle=False, num_workers=0)
+    train_loader = DataLoader(zinc_train, batch_size=256, shuffle=True, num_workers=32)
+    val_loader = DataLoader(zinc_val, batch_size=256, shuffle=False, num_workers=32)
 
     # mc = ModelCheckpoint(
     #     monitor="val/loss",
@@ -30,7 +36,7 @@ def main():
     #     filename="zinc-{epoch:02d}-{val/loss:.2f}",
     #     mode="min",
     # )
-
+    lr_monitor = LearningRateMonitor(logging_interval="step")
     model = PerceiverRegressor(
         input_channels=64,
         depth=6,
@@ -39,9 +45,16 @@ def main():
         weight_tie_layers=False,
         # lap_encodings_dim=8,
         encoding_type="deg",
+        virtual_latent=False,
     )
 
-    trainer = pl.Trainer(gpus=1, max_epochs=10000, logger=wandb_logger,)
+    log = True
+    trainer = pl.Trainer(
+        gpus=1,
+        max_epochs=10000,
+        logger=wandb_logger if log is True else None,
+        callbacks=[lr_monitor] if log is True else None,
+    )
     trainer.fit(model, train_loader, val_loader)
     # trainer.test(test_dataloaders=test_loader)
 

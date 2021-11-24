@@ -13,8 +13,7 @@ def preprocess_item_lap(item, pos_enc_dim=32):
 
 def preprocess_item_deg(item):
 
-    # +1 so 0 is for padding
-    item.indeg = degree(item.edge_index[1], dtype=int) + 1
+    item.indeg = degree(item.edge_index[1], dtype=int) + 1  # +1 so 0 is for padding
     item.outdeg = degree(item.edge_index[0], dtype=int) + 1
     return item
 

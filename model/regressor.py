@@ -11,7 +11,7 @@ class PerceiverRegressor(pl.LightningModule):
         self,
         input_channels=64,
         gnn_embed_dim=128,
-        depth=6,
+        depth=8,
         num_latents=8,
         latent_dim=32,
         cross_heads=8,
@@ -21,10 +21,11 @@ class PerceiverRegressor(pl.LightningModule):
         attn_dropout=0.0,
         ff_dropout=0.0,
         weight_tie_layers=False,
-        self_per_cross_attn=2,
+        self_per_cross_attn=1,
         lap_encodings_dim=8,
         encoding_type="lap",
         loss_fn=F.l1_loss,
+        virtual_latent=True,
     ):
         super().__init__()
 
@@ -47,6 +48,7 @@ class PerceiverRegressor(pl.LightningModule):
             self_per_cross_attn=self_per_cross_attn,
             lap_encodings_dim=lap_encodings_dim,
             encoding_type=encoding_type,
+            virtual_latent=virtual_latent,
         )
 
     def forward(self, x, **kwargs):
@@ -56,7 +58,6 @@ class PerceiverRegressor(pl.LightningModule):
         y_hat = self(batch).view(-1)
         loss = self.loss_fn(y_hat, batch.y)
         self.log("train/loss", loss)
-
         return loss
 
     def evaluate(self, batch, stage=None):
@@ -71,5 +72,5 @@ class PerceiverRegressor(pl.LightningModule):
         return self.evaluate(batch, "test")
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=2e-4, weight_decay=0.01)
+        optimizer = torch.optim.Adam(self.parameters(), lr=0.002)
         return [optimizer]

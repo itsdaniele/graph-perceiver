@@ -19,7 +19,7 @@ def main():
     train_loader = DataLoader(data_train, batch_size=32, shuffle=True, num_workers=32)
     val_loader = DataLoader(data_val, batch_size=32, shuffle=False, num_workers=32)
 
-    model = PerceiverClassifier(input_channels=6, depth=4)
+    model = PerceiverIOClassifier(input_channels=6, depth=4)
     trainer = pl.Trainer(
         gpus=1,
         log_gpu_memory=True,

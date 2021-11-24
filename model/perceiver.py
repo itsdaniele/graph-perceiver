@@ -13,6 +13,8 @@ import torch.nn.functional as F
 from torch_geometric.nn import RGCNConv
 from torch_geometric.utils import to_dense_batch
 
+from torch_scatter import scatter_mean
+
 
 class GCNZinc(torch.nn.Module):
     def __init__(self, input_dim=64, embedding_dim=128):
@@ -168,7 +170,8 @@ class Perceiver(nn.Module):
         self_per_cross_attn=1,
         final_head=True,
         lap_encodings_dim=8,
-        encoding_type="lap"
+        encoding_type="lap",
+        virtual_latent=True
     ):
         """The shape of the final attention mechanism will be:
         depth * (cross attention -> self_per_cross_attn * self attention)
@@ -193,8 +196,13 @@ class Perceiver(nn.Module):
 
         input_dim = input_channels
         self.encoding_type = encoding_type
+        self.virtual_latent = virtual_latent
 
         self.gnn = GCNZinc(input_dim=input_dim, embedding_dim=gnn_embed_dim)
+
+        embed_edges = False
+        if embed_edges:
+            self.embed_edges = nn.Embedding(4, gnn_embed_dim)
 
         if self.encoding_type == "lap":
             self.embed_encodings = nn.Linear(lap_encodings_dim, gnn_embed_dim)
@@ -261,23 +269,25 @@ class Perceiver(nn.Module):
                 )
             )
 
-        self.to_out = (
-            nn.Sequential(
-                Reduce("b n d -> b d", "mean"),
-                nn.LayerNorm(latent_dim),
-                nn.Linear(latent_dim, 1),
+        if not virtual_latent:
+            self.to_out = (
+                nn.Sequential(
+                    Reduce("b n d -> b d", "mean"),
+                    nn.LayerNorm(latent_dim),
+                    nn.Linear(latent_dim, 1),
+                )
+                if final_head
+                else nn.Identity()
             )
-            if final_head
-            else nn.Identity()
-        )
+        else:
+            self.final_virtual = nn.Linear(latent_dim, 1)
 
-        self.final_virtual = nn.Linear(latent_dim, 1)
-
-        self.apply(lambda module: init_params(module, n_layers=depth))
+        # self.apply(lambda module: init_params(module, n_layers=depth))
 
     def forward(self, batch, return_embeddings=False, training=True):
 
-        data = self.gnn(batch)
+        # mean_edges = scatter_mean(batch.edge_attr, batch.edge_index[1])
+        data = self.gnn(batch)  # + self.embed_edges(mean_edges)
         data, mask = to_dense_batch(data, batch.batch, max_num_nodes=128)
 
         if self.encoding_type == "lap":
@@ -318,6 +328,5 @@ class Perceiver(nn.Module):
         if return_embeddings:
             return x
 
-        # to logits
-        return self.final_virtual(x[:, 0, :])
-
+        out = self.final_virtual(x[:, 0, :]) if self.virtual_latent else self.to_out(x)
+        return out
