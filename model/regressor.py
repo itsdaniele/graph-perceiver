@@ -25,7 +25,7 @@ class PerceiverRegressor(pl.LightningModule):
         lap_encodings_dim=8,
         encoding_type="lap",
         loss_fn=F.l1_loss,
-        virtual_latent=True,
+        virtual_latent=False,
     ):
         super().__init__()
 

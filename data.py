@@ -3,18 +3,38 @@ import torch
 
 from torch_geometric.utils import to_dense_adj, get_laplacian, degree
 import numpy as np
+import pyximport
+
+pyximport.install(setup_args={"include_dirs": np.get_include()})
+import algos
 
 
-def preprocess_item_lap(item, pos_enc_dim=32):
+def preprocess_item_lap(item, pos_enc_dim=8):
 
     item.lap = laplacian_positional_encoding(item, pos_enc_dim=pos_enc_dim)
     return item
 
 
-def preprocess_item_deg(item):
+def preprocess_item_deg(item, max_node=128, max_dist_=32):
 
     item.indeg = degree(item.edge_index[1], dtype=int) + 1  # +1 so 0 is for padding
     item.outdeg = degree(item.edge_index[0], dtype=int) + 1
+
+    N = item.x.size(0)
+
+    # node adj matrix [N, N] bool
+    adj = torch.zeros([N, N], dtype=torch.bool)
+    attn_edge_type = torch.zeros([N, N, 1], dtype=torch.long)
+    adj[item.edge_index[0, :], item.edge_index[1, :]] = True
+
+    shortest_path_result, path = algos.floyd_warshall(adj.numpy())
+    max_dist = np.amax(shortest_path_result)
+    edge_input = algos.gen_edge_input(max_dist, path, attn_edge_type.numpy())
+    spatial_pos = pad_spatial_pos(
+        torch.from_numpy((shortest_path_result)).long(), max_node
+    )
+    item.edge_input = pad_3d(torch.tensor(edge_input), max_node, max_node, max_dist_)
+    item.spatial_pos = spatial_pos
     return item
 
 
@@ -97,6 +117,26 @@ def pad_2d_unsqueeze(x, padlen):
     if xlen < padlen:
         new_x = x.new_zeros([padlen, xdim], dtype=x.dtype)
         new_x[:xlen, :] = x
+        x = new_x
+    return x.unsqueeze(0)
+
+
+def pad_spatial_pos(x, padlen):
+    x = x + 1
+    xlen = x.size(0)
+    if xlen < padlen:
+        new_x = x.new_zeros([padlen, padlen], dtype=x.dtype)
+        new_x[:xlen, :xlen] = x
+        x = new_x
+    return x.unsqueeze(0)
+
+
+def pad_3d(x, padlen1, padlen2, padlen3):
+    x = x + 1
+    xlen1, xlen2, xlen3, xlen4 = x.size()
+    if xlen1 < padlen1 or xlen2 < padlen2 or xlen3 < padlen3:
+        new_x = x.new_zeros([padlen1, padlen2, padlen3, xlen4], dtype=x.dtype)
+        new_x[:xlen1, :xlen2, :xlen3, :] = x
         x = new_x
     return x.unsqueeze(0)
 

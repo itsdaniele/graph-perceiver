@@ -282,13 +282,23 @@ class Perceiver(nn.Module):
         else:
             self.final_virtual = nn.Linear(latent_dim, 1)
 
-        # self.apply(lambda module: init_params(module, n_layers=depth))
+        # self.i = 0
+        # self.cut = nn.Sequential(
+        #     Reduce("b n d -> b d", "mean"), nn.Linear(gnn_embed_dim, 1),
+        # )
+
+        self.apply(lambda module: init_params(module, n_layers=depth))
 
     def forward(self, batch, return_embeddings=False, training=True):
 
         # mean_edges = scatter_mean(batch.edge_attr, batch.edge_index[1])
+
         data = self.gnn(batch)  # + self.embed_edges(mean_edges)
         data, mask = to_dense_batch(data, batch.batch, max_num_nodes=128)
+
+        # if self.i < 1000:
+        #     self.i += 1
+        #     return self.cut(data)
 
         if self.encoding_type == "lap":
             lap, _ = to_dense_batch(batch.lap, batch.batch, max_num_nodes=128)

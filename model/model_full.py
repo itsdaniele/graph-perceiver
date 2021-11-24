@@ -15,6 +15,25 @@ from torch_geometric.utils import to_dense_batch, to_dense_adj
 
 from torch.optim.lr_scheduler import _LRScheduler
 
+from torch_geometric.nn import RGCNConv
+
+
+class GCNZinc(torch.nn.Module):
+    def __init__(self, input_dim=64, embedding_dim=64):
+        super().__init__()
+        self.emb = torch.nn.Embedding(input_dim, embedding_dim)
+        self.conv1 = RGCNConv(embedding_dim, embedding_dim, num_relations=4)
+        self.conv2 = RGCNConv(embedding_dim, embedding_dim, num_relations=4)
+        self.conv3 = RGCNConv(embedding_dim, embedding_dim, num_relations=4)
+
+    def forward(self, data):
+        x, edge_index, edge_weight = data.x, data.edge_index, data.edge_attr
+        x = self.emb(x.squeeze(-1))
+        x = F.relu(self.conv1(x, edge_index, edge_weight)) + x
+        x = F.relu(self.conv2(x, edge_index, edge_weight)) + x
+        x = F.relu(self.conv3(x, edge_index, edge_weight)) + x
+        return x
+
 
 class PolynomialDecayLR(_LRScheduler):
     def __init__(
@@ -58,10 +77,10 @@ class PolynomialDecayLR(_LRScheduler):
 class PerceiverRegressor(pl.LightningModule):
     def __init__(
         self,
-        depth=12,
+        depth=8,
         latent_dim=80,
         latent_heads=8,
-        latent_dim_head=10,
+        latent_dim_head=8,
         attn_dropout=0.0,
         ff_dropout=0.0,
         weight_tie_layers=False,
@@ -86,14 +105,14 @@ class PerceiverRegressor(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         y_hat = self(batch).view(-1)
         loss = F.l1_loss(y_hat, batch.y)
-        self.log("train/loss", loss)
+        self.log("train/loss", loss, batch_size=batch.y.size(0))
 
         return loss
 
     def evaluate(self, batch, stage=None):
         y_hat = self(batch).view(-1)
         loss = F.l1_loss(y_hat, batch.y)
-        self.log("val/loss", loss)
+        self.log("val/loss", loss, batch_size=batch.y.size(0))
 
     def validation_step(self, batch, batch_idx):
         return self.evaluate(batch, "val")
@@ -246,7 +265,7 @@ class Perceiver(nn.Module):
         self,
         *,
         depth,
-        latent_dim=512,
+        latent_dim=80,
         latent_heads=8,
         latent_dim_head=64,
         attn_dropout=0.0,
@@ -275,8 +294,7 @@ class Perceiver(nn.Module):
         """
         super().__init__()
 
-        self.atom_encoder = nn.Embedding(64, latent_dim, padding_idx=63)
-        self.edge_encoder = nn.Embedding(64, 1)
+        # self.gnn = GCNZinc(64, 64)
 
         get_latent_attn = lambda: PreNorm(
             latent_dim,
@@ -314,30 +332,68 @@ class Perceiver(nn.Module):
             else nn.Identity()
         )
 
-        self.embed_encodings = nn.Linear(8, latent_dim)
+        # self.embed_encodings = nn.Linear(8, 80)
+        self.atom_encoder = nn.Embedding(64, latent_dim, padding_idx=0)
+        self.edge_encoder = nn.Embedding(64, 1, padding_idx=0)
+        self.embed_indegree = nn.Embedding(64, latent_dim, padding_idx=0)
+        self.embed_outdegree = nn.Embedding(64, latent_dim, padding_idx=0)
+        self.edge_dis_encoder = nn.Embedding(40, 1)
+        self.spatial_pos_encoder = nn.Embedding(40, 1, padding_idx=0)
 
+        self.multi_hop_max_dist = 20
         self.apply(lambda module: init_params(module, n_layers=depth))
 
     def forward(self, batch):
 
-        data, mask = to_dense_batch(
-            batch.x, batch.batch, max_num_nodes=128, fill_value=63
-        )
-        lap, _ = to_dense_batch(batch.lap, batch.batch, max_num_nodes=128)
+        spatial_pos_bias = self.spatial_pos_encoder(batch.spatial_pos)
 
-        edge_attr = self.edge_encoder(
-            to_dense_adj(
-                batch.edge_index, batch.batch, batch.edge_attr, max_num_nodes=128
-            )
-        ).squeeze(-1)
-        data = self.atom_encoder(data.squeeze(-1))
-        x = data + self.embed_encodings(lap).squeeze(-1)
+        spatial_pos_ = batch.spatial_pos.clone()
+        spatial_pos_[spatial_pos_ == 0] = 1  # set pad to 1
+        # set 1 to 1, x > 1 to x - 1
+        spatial_pos_ = torch.where(spatial_pos_ > 1, spatial_pos_ - 1, spatial_pos_)
+        if self.multi_hop_max_dist > 0:
+            spatial_pos_ = spatial_pos_.clamp(0, self.multi_hop_max_dist)
+            edge_input = batch.edge_input[:, :, :, : self.multi_hop_max_dist, :]
+        # [n_graph, n_node, n_node, max_dist, n_head]
+        edge_input = self.edge_encoder(edge_input).mean(-2)
+        max_dist = edge_input.size(-2)
+        edge_input_flat = edge_input.permute(3, 0, 1, 2, 4).reshape(max_dist, -1, 1)
+        edge_input_flat = torch.bmm(
+            edge_input_flat,
+            self.edge_dis_encoder.weight.reshape(-1, 1, 1)[:max_dist, :, :],
+        )
+        edge_input = edge_input_flat.reshape(max_dist, 64, 128, 128, 1).permute(
+            1, 2, 3, 0, 4
+        )
+        edge_input = (
+            edge_input.sum(-2) / (spatial_pos_.float().unsqueeze(-1))
+        ).permute(0, 3, 1, 2)
+
+        bias = edge_input.squeeze(1) + spatial_pos_bias.squeeze(-1)
+        data, mask = to_dense_batch(batch.x, batch.batch, max_num_nodes=128)
+        # lap, _ = to_dense_batch(batch.lap, batch.batch, max_num_nodes=64)
+        in_deg, _ = to_dense_batch(batch.indeg, batch.batch, max_num_nodes=128)
+        out_deg, _ = to_dense_batch(batch.outdeg, batch.batch, max_num_nodes=128)
+
+        # edge_attr = self.edge_encoder(
+        #     to_dense_adj(
+        #         batch.edge_index, batch.batch, batch.edge_attr, max_num_nodes=128
+        #     )
+        # ).squeeze(-1)
+        # data = self.atom_encoder(data.squeeze(-1) + 1)
+        # x = data + self.embed_encodings(lap).squeeze(-1)
+
+        x = (
+            self.atom_encoder(data.squeeze(-1))
+            + self.embed_indegree(in_deg)
+            + self.embed_outdegree(out_deg)
+        )
 
         # layers
 
         for self_attns in self.layers:
 
-            x = self_attns[0](x, mask=mask, bias=edge_attr) + x
+            x = self_attns[0](x, mask=None, bias=bias) + x
             x = self_attns[1](x) + x
 
         # to logits
