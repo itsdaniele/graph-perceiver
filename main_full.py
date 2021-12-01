@@ -21,19 +21,17 @@ def main():
     )
 
     train_loader = DataLoader(
-        zinc_train, batch_size=64, shuffle=True, num_workers=32, drop_last=True
+        zinc_train, batch_size=16, shuffle=True, num_workers=32, drop_last=True
     )
     val_loader = DataLoader(
-        zinc_val, batch_size=64, shuffle=False, num_workers=32, drop_last=True
+        zinc_val, batch_size=16, shuffle=False, num_workers=32, drop_last=True
     )
 
     model = PerceiverRegressor(
         depth=12, attn_dropout=0.0, ff_dropout=0.1, weight_tie_layers=False,
     )
 
-    trainer = pl.Trainer(
-        gpus=1, max_epochs=10000, progress_bar_refresh_rate=5, logger=wandb_logger,
-    )
+    trainer = pl.Trainer(gpus=1, max_epochs=10000, logger=wandb_logger,)
     trainer.fit(model, train_loader, val_loader)
     # trainer.test(test_dataloaders=test_loader)
 

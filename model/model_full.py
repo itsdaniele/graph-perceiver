@@ -15,25 +15,6 @@ from torch_geometric.utils import to_dense_batch, to_dense_adj
 
 from torch.optim.lr_scheduler import _LRScheduler
 
-from torch_geometric.nn import RGCNConv
-
-
-class GCNZinc(torch.nn.Module):
-    def __init__(self, input_dim=64, embedding_dim=64):
-        super().__init__()
-        self.emb = torch.nn.Embedding(input_dim, embedding_dim)
-        self.conv1 = RGCNConv(embedding_dim, embedding_dim, num_relations=4)
-        self.conv2 = RGCNConv(embedding_dim, embedding_dim, num_relations=4)
-        self.conv3 = RGCNConv(embedding_dim, embedding_dim, num_relations=4)
-
-    def forward(self, data):
-        x, edge_index, edge_weight = data.x, data.edge_index, data.edge_attr
-        x = self.emb(x.squeeze(-1))
-        x = F.relu(self.conv1(x, edge_index, edge_weight)) + x
-        x = F.relu(self.conv2(x, edge_index, edge_weight)) + x
-        x = F.relu(self.conv3(x, edge_index, edge_weight)) + x
-        return x
-
 
 class PolynomialDecayLR(_LRScheduler):
     def __init__(
@@ -231,7 +212,7 @@ class Attention(nn.Module):
         sim = einsum("b i d, b j d -> b i j", q, k) * self.scale
 
         if bias is not None:
-            bias = repeat(bias, "b n d -> (repeat b) n d", repeat=h)
+            bias = rearrange(bias, "b h n d ->(b h) n d")
             sim += bias
 
         if exists(mask):
@@ -334,11 +315,11 @@ class Perceiver(nn.Module):
 
         # self.embed_encodings = nn.Linear(8, 80)
         self.atom_encoder = nn.Embedding(64, latent_dim, padding_idx=0)
-        self.edge_encoder = nn.Embedding(64, 1, padding_idx=0)
+        self.edge_encoder = nn.Embedding(64, 8, padding_idx=0)
         self.embed_indegree = nn.Embedding(64, latent_dim, padding_idx=0)
         self.embed_outdegree = nn.Embedding(64, latent_dim, padding_idx=0)
-        self.edge_dis_encoder = nn.Embedding(40, 1)
-        self.spatial_pos_encoder = nn.Embedding(40, 1, padding_idx=0)
+        self.edge_dis_encoder = nn.Embedding(40 * 8 * 8, 1)
+        self.spatial_pos_encoder = nn.Embedding(40, 8, padding_idx=0)
 
         self.multi_hop_max_dist = 20
         self.apply(lambda module: init_params(module, n_layers=depth))
@@ -357,31 +338,22 @@ class Perceiver(nn.Module):
         # [n_graph, n_node, n_node, max_dist, n_head]
         edge_input = self.edge_encoder(edge_input).mean(-2)
         max_dist = edge_input.size(-2)
-        edge_input_flat = edge_input.permute(3, 0, 1, 2, 4).reshape(max_dist, -1, 1)
+        edge_input_flat = edge_input.permute(3, 0, 1, 2, 4).reshape(max_dist, -1, 8)
         edge_input_flat = torch.bmm(
             edge_input_flat,
-            self.edge_dis_encoder.weight.reshape(-1, 1, 1)[:max_dist, :, :],
+            self.edge_dis_encoder.weight.reshape(-1, 8, 8)[:max_dist, :, :],
         )
-        edge_input = edge_input_flat.reshape(max_dist, 64, 128, 128, 1).permute(
+        edge_input = edge_input_flat.reshape(max_dist, 16, 128, 128, 8).permute(
             1, 2, 3, 0, 4
         )
         edge_input = (
             edge_input.sum(-2) / (spatial_pos_.float().unsqueeze(-1))
         ).permute(0, 3, 1, 2)
 
-        bias = edge_input.squeeze(1) + spatial_pos_bias.squeeze(-1)
+        bias = edge_input + spatial_pos_bias.permute(0, 3, 1, 2)
         data, mask = to_dense_batch(batch.x, batch.batch, max_num_nodes=128)
-        # lap, _ = to_dense_batch(batch.lap, batch.batch, max_num_nodes=64)
         in_deg, _ = to_dense_batch(batch.indeg, batch.batch, max_num_nodes=128)
         out_deg, _ = to_dense_batch(batch.outdeg, batch.batch, max_num_nodes=128)
-
-        # edge_attr = self.edge_encoder(
-        #     to_dense_adj(
-        #         batch.edge_index, batch.batch, batch.edge_attr, max_num_nodes=128
-        #     )
-        # ).squeeze(-1)
-        # data = self.atom_encoder(data.squeeze(-1) + 1)
-        # x = data + self.embed_encodings(lap).squeeze(-1)
 
         x = (
             self.atom_encoder(data.squeeze(-1))
@@ -393,7 +365,7 @@ class Perceiver(nn.Module):
 
         for self_attns in self.layers:
 
-            x = self_attns[0](x, mask=None, bias=bias) + x
+            x = self_attns[0](x, mask=mask, bias=bias) + x
             x = self_attns[1](x) + x
 
         # to logits

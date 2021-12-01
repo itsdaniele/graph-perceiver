@@ -20,21 +20,21 @@ def preprocess_item_deg(item, max_node=128, max_dist_=32):
     item.indeg = degree(item.edge_index[1], dtype=int) + 1  # +1 so 0 is for padding
     item.outdeg = degree(item.edge_index[0], dtype=int) + 1
 
-    N = item.x.size(0)
+    # N = item.x.size(0)
 
-    # node adj matrix [N, N] bool
-    adj = torch.zeros([N, N], dtype=torch.bool)
-    attn_edge_type = torch.zeros([N, N, 1], dtype=torch.long)
-    adj[item.edge_index[0, :], item.edge_index[1, :]] = True
+    # # node adj matrix [N, N] bool
+    # adj = torch.zeros([N, N], dtype=torch.bool)
+    # attn_edge_type = torch.zeros([N, N, 1], dtype=torch.long)
+    # adj[item.edge_index[0, :], item.edge_index[1, :]] = True
 
-    shortest_path_result, path = algos.floyd_warshall(adj.numpy())
-    max_dist = np.amax(shortest_path_result)
-    edge_input = algos.gen_edge_input(max_dist, path, attn_edge_type.numpy())
-    spatial_pos = pad_spatial_pos(
-        torch.from_numpy((shortest_path_result)).long(), max_node
-    )
-    item.edge_input = pad_3d(torch.tensor(edge_input), max_node, max_node, max_dist_)
-    item.spatial_pos = spatial_pos
+    # shortest_path_result, path = algos.floyd_warshall(adj.numpy())
+    # max_dist = np.amax(shortest_path_result)
+    # edge_input = algos.gen_edge_input(max_dist, path, attn_edge_type.numpy())
+    # spatial_pos = pad_spatial_pos(
+    #     torch.from_numpy((shortest_path_result)).long(), max_node
+    # )
+    # item.edge_input = pad_3d(torch.tensor(edge_input), max_node, max_node, max_dist_)
+    # item.spatial_pos = spatial_pos
     return item
 
 

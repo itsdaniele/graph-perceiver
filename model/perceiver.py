@@ -223,7 +223,7 @@ class Perceiver(nn.Module):
                 dim_head=cross_dim_head,
                 dropout=attn_dropout,
             ),
-            context_dim=gnn_embed_dim,
+            # context_dim=gnn_embed_dim,
         )
         get_cross_ff = lambda: PreNorm(
             latent_dim, FeedForward(latent_dim, dropout=ff_dropout)
@@ -282,11 +282,6 @@ class Perceiver(nn.Module):
         else:
             self.final_virtual = nn.Linear(latent_dim, 1)
 
-        # self.i = 0
-        # self.cut = nn.Sequential(
-        #     Reduce("b n d -> b d", "mean"), nn.Linear(gnn_embed_dim, 1),
-        # )
-
         self.apply(lambda module: init_params(module, n_layers=depth))
 
     def forward(self, batch, return_embeddings=False, training=True):
@@ -295,10 +290,6 @@ class Perceiver(nn.Module):
 
         data = self.gnn(batch)  # + self.embed_edges(mean_edges)
         data, mask = to_dense_batch(data, batch.batch, max_num_nodes=128)
-
-        # if self.i < 1000:
-        #     self.i += 1
-        #     return self.cut(data)
 
         if self.encoding_type == "lap":
             lap, _ = to_dense_batch(batch.lap, batch.batch, max_num_nodes=128)
