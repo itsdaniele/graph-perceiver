@@ -5,30 +5,35 @@ import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
 
+import torchmetrics
 
-class PerceiverRegressor(pl.LightningModule):
+
+class PerceiverClassifier(pl.LightningModule):
     def __init__(
         self,
         input_channels=64,
-        gnn_embed_dim=128,
+        gnn_embed_dim=32,
         depth=8,
         num_latents=8,
         latent_dim=32,
-        cross_heads=8,
-        latent_heads=8,
-        cross_dim_head=8,
-        latent_dim_head=8,
+        cross_heads=4,
+        latent_heads=4,
+        cross_dim_head=4,
+        latent_dim_head=4,
         attn_dropout=0.0,
         ff_dropout=0.0,
         weight_tie_layers=False,
         self_per_cross_attn=1,
-        loss_fn=F.l1_loss,
+        loss_fn=torch.nn.CrossEntropyLoss(),
+        num_classes=2,
         virtual_latent=False,
+        evaluator=None,
     ):
         super().__init__()
 
         self.save_hyperparameters()
         self.loss_fn = loss_fn
+        self.evaluator = evaluator
 
         self.perceiver = Perceiver(
             input_channels=input_channels,
@@ -45,21 +50,45 @@ class PerceiverRegressor(pl.LightningModule):
             weight_tie_layers=weight_tie_layers,
             self_per_cross_attn=self_per_cross_attn,
             virtual_latent=virtual_latent,
+            num_classes=num_classes,
         )
 
     def forward(self, x, **kwargs):
         return self.perceiver(x, **kwargs)
 
     def training_step(self, batch, batch_idx):
-        y_hat = self(batch).view(-1)
+        y_hat = self(batch)
+
         loss = self.loss_fn(y_hat, batch.y)
-        self.log("train/loss", loss, on_epoch=True)
+
+        # res = {
+        #     "y_true": batch.y.detach().cpu(),
+        #     "y_pred": y_hat.detach().cpu(),
+        # }
+        self.log("train/loss", loss, on_step=False, on_epoch=True)
+        # self.log(
+        #     "train/acc", self.evaluator.eval(res)["ap"], on_step=False, on_epoch=True,
+        # )
         return loss
 
     def evaluate(self, batch, stage=None):
-        y_hat = self(batch).view(-1)
+        # y_hat = self(batch).view(-1)
+        # loss = self.loss_fn(y_hat.to(torch.float32), batch.y.to(torch.float32).view(-1))
+
+        y_hat = self(batch)
+
         loss = self.loss_fn(y_hat, batch.y)
-        self.log("val/loss", loss)
+        self.log(f"{stage}/loss", loss)
+
+        # res = {
+        #     "y_true": batch.y.detach().cpu(),
+        #     "y_pred": y_hat.detach().cpu(),
+        # }
+
+        # ap = self.evaluator.eval(res)["ap"]
+        # self.log(f"{stage}/ap", ap)
+
+        # return ap
 
     def validation_step(self, batch, batch_idx):
         return self.evaluate(batch, "val")
@@ -68,5 +97,5 @@ class PerceiverRegressor(pl.LightningModule):
         return self.evaluate(batch, "test")
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=0.002)
+        optimizer = torch.optim.Adam(self.parameters(), lr=0.0001)
         return [optimizer]

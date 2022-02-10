@@ -14,16 +14,9 @@ import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
 
 
-class GCNCora(torch.nn.Module):
-    def __init__(self, input_dim=500, embed_dim=16):
-        super().__init__()
-        self.conv1 = GCNConv(input_dim, embed_dim)
-        self.conv2 = GCNConv(embed_dim, embed_dim)
+from ogb.graphproppred.mol_encoder import AtomEncoder, BondEncoder
 
-    def forward(self, data):
-        x = F.relu(self.conv1(data.x, data.edge_index))
-        x = self.conv2(x, data.edge_index)
-        return x
+from .gnn import GNN_node_Virtualnode_no_batchnorm
 
 
 def exists(val):
@@ -158,31 +151,16 @@ class PerceiverIO(nn.Module):
         attn_dropout,
         ff_dropout,
     ):
-        """The shape of the final attention mechanism will be:
-        depth * (cross attention -> self_per_cross_attn * self attention)
-
-        Args:
-          depth: Depth of net.
-          input_channels: Number of channels for each token of the input.
-          num_latents: Number of latents, or induced set points, or centroids.
-              Different papers giving it different names.
-          latent_dim: Latent dimension.
-          cross_heads: Number of heads for cross attention. Paper said 1.
-          latent_heads: Number of heads for latent self attention, 8.
-          cross_dim_head: Number of dimensions per cross attention head.
-          latent_dim_head: Number of dimensions per latent self attention head.
-          attn_dropout: Attention dropout
-          ff_dropout: Feedforward dropout
-          weight_tie_layers: Whether to weight tie layers (optional).
-          self_per_cross_attn: Number of self attention blocks per cross attn.
-          final_head: mean pool and project embeddings to number of classes (num_classes) at the end
-        """
         super().__init__()
 
-        self.gnn = GCNCora(embed_dim=gnn_embed_dim)
+        self.lin1 = nn.Linear(1433, gnn_embed_dim)
+        self.lin2 = nn.Linear(1433, gnn_embed_dim)
+        lin_queries = nn.Linear(1433, gnn_embed_dim)
+        self.gnn1 = GNN_node_Virtualnode_no_batchnorm(2, gnn_embed_dim, self.lin1, None)
+
         self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
 
-        self.cross_attend_blocks = nn.ModuleList(
+        self.cross_attend_block = nn.ModuleList(
             [
                 PreNorm(
                     latent_dim,
@@ -193,7 +171,7 @@ class PerceiverIO(nn.Module):
                         dim_head=cross_dim_head,
                         dropout=attn_dropout,
                     ),
-                    context_dim=queries_dim,
+                    # context_dim=queries_dim,
                 ),
                 PreNorm(latent_dim, FeedForward(latent_dim, dropout=ff_dropout)),
             ]
@@ -244,41 +222,26 @@ class PerceiverIO(nn.Module):
             nn.Linear(queries_dim, logits_dim) if exists(logits_dim) else nn.Identity()
         )
 
-        self.in_degree_encoder = nn.Embedding(256, gnn_embed_dim)
-        self.out_degree_encoder = nn.Embedding(256, gnn_embed_dim)
-
-        self.i = 0
-
-        # self.lap_encoder = nn.Linear(32, 16)
+        self.pos_emb = nn.Embedding(2708, gnn_embed_dim)
+        self.pos_emb_2 = nn.Embedding(2708, gnn_embed_dim)
 
     def forward(self, batch, mask=None, queries=None):
 
-        data = (
-            self.gnn(batch)
-            + self.in_degree_encoder(batch.indeg)
-            + self.out_degree_encoder(batch.outdeg)
-        ).unsqueeze(0)
+        emb = self.pos_emb(torch.arange(2708, device=batch.x.device))
+        emb2 = self.pos_emb_2(torch.arange(2708, device=batch.x.device))
+        # emb_latents = self.pos_emb_latents(torch.arange(8, device=batch.x.device))
 
-        # if self.training:
-        #     batch_lap_pos_enc = batch.lap
-        #     sign_flip = torch.rand(batch_lap_pos_enc.size(0)).to(batch.lap.device)
-        #     sign_flip[sign_flip >= 0.5] = 1.0
-        #     sign_flip[sign_flip < 0.5] = -1.0
-        #     lap = batch_lap_pos_enc * sign_flip.unsqueeze(1)
-        # else:
-        #     lap = batch.lap
-        # data = (self.gnn(batch) + self.lap_encoder(lap)).unsqueeze(0)
+        data = (self.gnn1(batch, training=self.training) + emb2).unsqueeze(0)
 
         if queries is None:
-            queries = data.clone()
+            queries = (self.lin2(batch.x) + emb).unsqueeze(0)
 
         b = data.shape[0]
         x = repeat(self.latents, "n d -> b n d", b=b)
 
-        cross_attn, cross_ff = self.cross_attend_blocks
+        cross_attn, cross_ff = self.cross_attend_block
 
         # cross attention only happens once for Perceiver IO
-
         x = cross_attn(x, context=data) + x
         x = cross_ff(x) + x
 
@@ -288,25 +251,19 @@ class PerceiverIO(nn.Module):
             x = self_attn(x) + x
             x = self_ff(x) + x
 
-        if not exists(queries):
-            return x
-
         # make sure queries contains batch dimension
 
         if queries.ndim == 2:
             queries = repeat(queries, "n d -> b n d", b=b)
 
         # cross attend from decoder queries to latents
-
         latents = self.decoder_cross_attn(queries, context=x)
 
         # optional decoder feedforward
-
         if exists(self.decoder_ff):
             latents = latents + self.decoder_ff(latents)
 
         # final linear out
         logits = self.to_logits(latents)
         return logits
-        # return F.log_softmax(logits, dim=-1)
 

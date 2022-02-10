@@ -10,27 +10,11 @@ from einops.layers.torch import Reduce
 import torch
 import torch.nn.functional as F
 
-from torch_geometric.nn import RGCNConv
 from torch_geometric.utils import to_dense_batch
 
-from torch_scatter import scatter_mean
+from ogb.graphproppred.mol_encoder import AtomEncoder, BondEncoder
 
-
-class GCNZinc(torch.nn.Module):
-    def __init__(self, input_dim=64, embedding_dim=128):
-        super().__init__()
-        self.emb = torch.nn.Embedding(input_dim, embedding_dim)
-        self.conv1 = RGCNConv(embedding_dim, embedding_dim, num_relations=4)
-        self.conv2 = RGCNConv(embedding_dim, embedding_dim, num_relations=4)
-        self.conv3 = RGCNConv(embedding_dim, embedding_dim, num_relations=4)
-
-    def forward(self, data):
-        x, edge_index, edge_weight = data.x, data.edge_index, data.edge_attr
-        x = self.emb(x.squeeze(-1))
-        x = F.relu(self.conv1(x, edge_index, edge_weight)) + x
-        x = F.relu(self.conv2(x, edge_index, edge_weight)) + x
-        x = F.relu(self.conv3(x, edge_index, edge_weight)) + x
-        return x
+from .gnn import GNN_node_Virtualnode
 
 
 def exists(val):
@@ -169,49 +153,28 @@ class Perceiver(nn.Module):
         weight_tie_layers=False,
         self_per_cross_attn=1,
         final_head=True,
-        lap_encodings_dim=8,
-        encoding_type="lap",
-        virtual_latent=True
+        virtual_latent=False,
+        num_classes=2
     ):
-        """The shape of the final attention mechanism will be:
-        depth * (cross attention -> self_per_cross_attn * self attention)
 
-        Args:
-          depth: Depth of net.
-          input_channels: Number of channels for each token of the input.
-          num_latents: Number of latents, or induced set points, or centroids.
-              Different papers giving it different names.
-          latent_dim: Latent dimension.
-          cross_heads: Number of heads for cross attention. Paper said 1.
-          latent_heads: Number of heads for latent self attention, 8.
-          cross_dim_head: Number of dimensions per cross attention head.
-          latent_dim_head: Number of dimensions per latent self attention head.
-          attn_dropout: Attention dropout
-          ff_dropout: Feedforward dropout
-          weight_tie_layers: Whether to weight tie layers (optional).
-          self_per_cross_attn: Number of self attention blocks per cross attn.
-          final_head: mean pool and project embeddings to number of classes (num_classes) at the end
-        """
         super().__init__()
 
-        input_dim = input_channels
-        self.encoding_type = encoding_type
         self.virtual_latent = virtual_latent
 
-        self.gnn = GCNZinc(input_dim=input_dim, embedding_dim=gnn_embed_dim)
+        dataset_name = "nci"
 
-        embed_edges = False
-        if embed_edges:
-            self.embed_edges = nn.Embedding(4, gnn_embed_dim)
-
-        if self.encoding_type == "lap":
-            self.embed_encodings = nn.Linear(lap_encodings_dim, gnn_embed_dim)
-        elif self.encoding_type == "deg":
-            self.indeg_to_emb = torch.nn.Embedding(64, gnn_embed_dim, padding_idx=0)
-            self.outdeg_to_emb = torch.nn.Embedding(64, gnn_embed_dim, padding_idx=0)
-
+        if dataset_name == "nci":
+            self.gnn = GNN_node_Virtualnode(
+                3,
+                gnn_embed_dim,
+                torch.nn.Linear(input_channels, gnn_embed_dim),
+                BondEncoder,
+            )
         else:
-            raise NotImplementedError
+            self.gnn = GNN_node_Virtualnode(
+                3, gnn_embed_dim, AtomEncoder(gnn_embed_dim), BondEncoder
+            )
+
         self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
 
         get_cross_attn = lambda: PreNorm(
@@ -223,7 +186,7 @@ class Perceiver(nn.Module):
                 dim_head=cross_dim_head,
                 dropout=attn_dropout,
             ),
-            # context_dim=gnn_embed_dim,
+            context_dim=gnn_embed_dim,
         )
         get_cross_ff = lambda: PreNorm(
             latent_dim, FeedForward(latent_dim, dropout=ff_dropout)
@@ -269,48 +232,27 @@ class Perceiver(nn.Module):
                 )
             )
 
+        # num_classes = 128 for molpcba
+
         if not virtual_latent:
             self.to_out = (
                 nn.Sequential(
                     Reduce("b n d -> b d", "mean"),
                     nn.LayerNorm(latent_dim),
-                    nn.Linear(latent_dim, 1),
+                    nn.Linear(latent_dim, num_classes),
                 )
                 if final_head
                 else nn.Identity()
             )
         else:
-            self.final_virtual = nn.Linear(latent_dim, 1)
+            self.final_virtual = nn.Linear(latent_dim, num_classes)
 
         self.apply(lambda module: init_params(module, n_layers=depth))
 
-    def forward(self, batch, return_embeddings=False, training=True):
+    def forward(self, batch):
 
-        # mean_edges = scatter_mean(batch.edge_attr, batch.edge_index[1])
-
-        data = self.gnn(batch)  # + self.embed_edges(mean_edges)
-        data, mask = to_dense_batch(data, batch.batch, max_num_nodes=128)
-
-        if self.encoding_type == "lap":
-            lap, _ = to_dense_batch(batch.lap, batch.batch, max_num_nodes=128)
-
-            if training == True:
-                sign_flip = torch.rand(lap.size(-1)).to(lap.device)
-                sign_flip[sign_flip >= 0.5] = 1.0
-                sign_flip[sign_flip < 0.5] = -1.0
-                lap = lap * sign_flip.unsqueeze(0)
-
-            data += self.embed_encodings(lap)
-        else:
-            indeg, _ = to_dense_batch(
-                batch.indeg, batch.batch, max_num_nodes=128, fill_value=0
-            )
-            outdeg, _ = to_dense_batch(
-                batch.outdeg, batch.batch, max_num_nodes=128, fill_value=0
-            )
-            indeg = self.indeg_to_emb(indeg)
-            outdeg = self.outdeg_to_emb(outdeg)
-            data += indeg + outdeg
+        data = self.gnn(batch)
+        data, mask = to_dense_batch(data, batch.batch, max_num_nodes=256)
 
         b = data.shape[0]
         x = repeat(self.latents, "n d -> b n d", b=b)
@@ -325,9 +267,6 @@ class Perceiver(nn.Module):
                 x = self_attn(x) + x
                 x = self_ff(x) + x
 
-        # allow for fetching embeddings
-        if return_embeddings:
-            return x
-
-        out = self.final_virtual(x[:, 0, :]) if self.virtual_latent else self.to_out(x)
+        # out = self.to_out(x).sum(-2) / mask.sum(-1, keepdim=True)
+        out = self.final_virtual(x)[:, 0, :]
         return out

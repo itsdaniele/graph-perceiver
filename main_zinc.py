@@ -11,21 +11,13 @@ from pytorch_lightning.callbacks import LearningRateMonitor
 
 wandb_logger = WandbLogger(project="graph-perceiver")
 
-import torch
-
-torch.multiprocessing.set_sharing_strategy("file_system")
-
 
 def main():
 
     pl.seed_everything(42)
 
-    zinc_train = MyZINCDataset(
-        root="./data", subset=True, split="train", encoding_type="deg"
-    )
-    zinc_val = MyZINCDataset(
-        root="./data", subset=True, split="val", encoding_type="deg"
-    )
+    zinc_train = MyZINCDataset(root="./data", subset=True, split="train")
+    zinc_val = MyZINCDataset(root="./data", subset=True, split="val")
 
     train_loader = DataLoader(zinc_train, batch_size=256, shuffle=True, num_workers=32)
     val_loader = DataLoader(zinc_val, batch_size=256, shuffle=False, num_workers=32)
@@ -39,12 +31,10 @@ def main():
     lr_monitor = LearningRateMonitor(logging_interval="step")
     model = PerceiverRegressor(
         input_channels=64,
-        depth=6,
+        depth=8,
         attn_dropout=0.0,
         ff_dropout=0.1,
         weight_tie_layers=False,
-        # lap_encodings_dim=8,
-        encoding_type="deg",
         virtual_latent=False,
     )
 

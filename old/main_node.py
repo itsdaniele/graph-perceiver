@@ -1,5 +1,5 @@
 import pytorch_lightning as pl
-from model.classifier import PerceiverIOClassifier
+from model.classifier_io import PerceiverIOClassifier
 
 
 from data import MyGNNBenchmarkDataset

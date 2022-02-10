@@ -6,3 +6,4 @@ lightning_logs/
 nohup.out
 wandb/
 .vscode/
+outputs/

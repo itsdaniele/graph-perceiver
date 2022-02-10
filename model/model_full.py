@@ -62,8 +62,8 @@ class PerceiverRegressor(pl.LightningModule):
         latent_dim=80,
         latent_heads=8,
         latent_dim_head=8,
-        attn_dropout=0.0,
-        ff_dropout=0.0,
+        attn_dropout=0.1,
+        ff_dropout=0.1,
         weight_tie_layers=False,
     ):
         super().__init__()
@@ -85,15 +85,15 @@ class PerceiverRegressor(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         y_hat = self(batch).view(-1)
-        loss = F.l1_loss(y_hat, batch.y)
-        self.log("train/loss", loss, batch_size=batch.y.size(0))
+        loss = F.l1_loss(y_hat, batch.y.view(-1).float())
+        self.log("train/loss", loss)
 
         return loss
 
     def evaluate(self, batch, stage=None):
         y_hat = self(batch).view(-1)
-        loss = F.l1_loss(y_hat, batch.y)
-        self.log("val/loss", loss, batch_size=batch.y.size(0))
+        loss = F.l1_loss(y_hat, batch.y.view(-1).float())
+        self.log("val/loss", loss)
 
     def validation_step(self, batch, batch_idx):
         return self.evaluate(batch, "val")
@@ -107,8 +107,8 @@ class PerceiverRegressor(pl.LightningModule):
         scheduler = {
             "scheduler": PolynomialDecayLR(
                 optimizer,
-                warmup_updates=60000,
-                tot_updates=1000000,
+                warmup_updates=40000,
+                tot_updates=400000,
                 lr=2e-4,
                 end_lr=1e-9,
                 power=1.0,
@@ -182,6 +182,102 @@ class FeedForward(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+
+
+class FeedForwardNetwork(nn.Module):
+    def __init__(self, hidden_size, ffn_size, dropout_rate):
+        super(FeedForwardNetwork, self).__init__()
+
+        self.layer1 = nn.Linear(hidden_size, ffn_size)
+        self.gelu = nn.GELU()
+        self.layer2 = nn.Linear(ffn_size, hidden_size)
+
+    def forward(self, x):
+        x = self.layer1(x)
+        x = self.gelu(x)
+        x = self.layer2(x)
+        return x
+
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, hidden_size, attention_dropout_rate, num_heads):
+        super(MultiHeadAttention, self).__init__()
+
+        self.num_heads = num_heads
+
+        self.att_size = att_size = hidden_size // num_heads
+        self.scale = att_size ** -0.5
+
+        self.linear_q = nn.Linear(hidden_size, num_heads * att_size)
+        self.linear_k = nn.Linear(hidden_size, num_heads * att_size)
+        self.linear_v = nn.Linear(hidden_size, num_heads * att_size)
+        self.att_dropout = nn.Dropout(attention_dropout_rate)
+
+        self.output_layer = nn.Linear(num_heads * att_size, hidden_size)
+
+    def forward(self, q, k, v, attn_bias=None):
+        orig_q_size = q.size()
+
+        d_k = self.att_size
+        d_v = self.att_size
+        batch_size = q.size(0)
+
+        # head_i = Attention(Q(W^Q)_i, K(W^K)_i, V(W^V)_i)
+        q = self.linear_q(q).view(batch_size, -1, self.num_heads, d_k)
+        k = self.linear_k(k).view(batch_size, -1, self.num_heads, d_k)
+        v = self.linear_v(v).view(batch_size, -1, self.num_heads, d_v)
+
+        q = q.transpose(1, 2)  # [b, h, q_len, d_k]
+        v = v.transpose(1, 2)  # [b, h, v_len, d_v]
+        k = k.transpose(1, 2).transpose(2, 3)  # [b, h, d_k, k_len]
+
+        # Scaled Dot-Product Attention.
+        # Attention(Q, K, V) = softmax((QK^T)/sqrt(d_k))V
+        q = q * self.scale
+        x = torch.matmul(q, k)  # [b, h, q_len, k_len]
+        if attn_bias is not None:
+            x = x + attn_bias
+
+        x = torch.softmax(x, dim=3)
+        x = self.att_dropout(x)
+        x = x.matmul(v)  # [b, h, q_len, attn]
+
+        x = x.transpose(1, 2).contiguous()  # [b, q_len, h, attn]
+        x = x.view(batch_size, -1, self.num_heads * d_v)
+
+        x = self.output_layer(x)
+
+        assert x.size() == orig_q_size
+        return x
+
+
+class EncoderLayer(nn.Module):
+    def __init__(
+        self, hidden_size, ffn_size, dropout_rate, attention_dropout_rate, num_heads
+    ):
+        super(EncoderLayer, self).__init__()
+
+        self.self_attention_norm = nn.LayerNorm(hidden_size)
+        self.self_attention = MultiHeadAttention(
+            hidden_size, attention_dropout_rate, num_heads
+        )
+        self.self_attention_dropout = nn.Dropout(dropout_rate)
+
+        self.ffn_norm = nn.LayerNorm(hidden_size)
+        self.ffn = FeedForwardNetwork(hidden_size, ffn_size, dropout_rate)
+        self.ffn_dropout = nn.Dropout(dropout_rate)
+
+    def forward(self, x, attn_bias=None):
+        y = self.self_attention_norm(x)
+        y = self.self_attention(y, y, y, attn_bias)
+        y = self.self_attention_dropout(y)
+        x = x + y
+
+        y = self.ffn_norm(x)
+        y = self.ffn(y)
+        y = self.ffn_dropout(y)
+        x = x + y
+        return x
 
 
 class Attention(nn.Module):
@@ -275,60 +371,63 @@ class Perceiver(nn.Module):
         """
         super().__init__()
 
-        # self.gnn = GCNZinc(64, 64)
+        self.latent_heads = latent_heads
 
-        get_latent_attn = lambda: PreNorm(
-            latent_dim,
-            Attention(
-                latent_dim,
-                heads=latent_heads,
-                dim_head=latent_dim_head,
-                dropout=attn_dropout,
-            ),
-        )
-        get_latent_ff = lambda: PreNorm(
-            latent_dim, FeedForward(latent_dim, dropout=ff_dropout)
-        )
+        # get_latent_attn = lambda: PreNorm(
+        #     latent_dim,
+        #     Attention(
+        #         latent_dim,
+        #         heads=latent_heads,
+        #         dim_head=latent_dim_head,
+        #         dropout=attn_dropout,
+        #     ),
+        # )
+        # get_latent_ff = lambda: PreNorm(
+        #     latent_dim, FeedForward(latent_dim, dropout=ff_dropout)
+        # )
 
-        get_latent_attn, get_latent_ff = map(cache_fn, (get_latent_attn, get_latent_ff))
+        # get_latent_attn, get_latent_ff = map(cache_fn, (get_latent_attn, get_latent_ff))
 
         self.layers = nn.ModuleList([])
-        for i in range(depth):
-            should_cache = i > 0 and weight_tie_layers
-            cache_args = {"_cache": should_cache}
+        for _ in range(depth):
+            # should_cache = i > 0 and weight_tie_layers
+            # cache_args = {"_cache": should_cache}
 
             self.layers.append(
-                nn.ModuleList(
-                    [get_latent_attn(**cache_args), get_latent_ff(**cache_args)]
+                EncoderLayer(
+                    latent_dim, latent_dim, ff_dropout, attn_dropout, latent_heads
                 )
             )
 
+        self.final_ln = nn.LayerNorm(latent_dim)
         self.to_out = (
-            nn.Sequential(
-                Reduce("b n d -> b d", "mean"),
-                nn.LayerNorm(latent_dim),
-                nn.Linear(latent_dim, 1),
-            )
+            nn.Sequential(Reduce("b n d -> b d", "mean"), nn.Linear(latent_dim, 1))
             if final_head
             else nn.Identity()
         )
 
-        # self.embed_encodings = nn.Linear(8, 80)
         self.atom_encoder = nn.Embedding(64, latent_dim, padding_idx=0)
         self.edge_encoder = nn.Embedding(64, 8, padding_idx=0)
         self.embed_indegree = nn.Embedding(64, latent_dim, padding_idx=0)
         self.embed_outdegree = nn.Embedding(64, latent_dim, padding_idx=0)
-        self.edge_dis_encoder = nn.Embedding(40 * 8 * 8, 1)
-        self.spatial_pos_encoder = nn.Embedding(40, 8, padding_idx=0)
+        self.edge_dis_encoder = nn.Embedding(40 * latent_heads * latent_heads, 1)
+        self.spatial_pos_encoder = nn.Embedding(40, latent_heads, padding_idx=0)
 
         self.multi_hop_max_dist = 20
         self.apply(lambda module: init_params(module, n_layers=depth))
 
     def forward(self, batch):
 
+        n_graph, n_node = batch.x.size()[:2]
         spatial_pos_bias = self.spatial_pos_encoder(batch.spatial_pos)
 
+        graph_attn_bias = batch.attn_bias.clone()
+        graph_attn_bias = graph_attn_bias.unsqueeze(1).repeat(
+            1, self.latent_heads, 1, 1
+        )
+
         spatial_pos_ = batch.spatial_pos.clone()
+
         spatial_pos_[spatial_pos_ == 0] = 1  # set pad to 1
         # set 1 to 1, x > 1 to x - 1
         spatial_pos_ = torch.where(spatial_pos_ > 1, spatial_pos_ - 1, spatial_pos_)
@@ -338,35 +437,46 @@ class Perceiver(nn.Module):
         # [n_graph, n_node, n_node, max_dist, n_head]
         edge_input = self.edge_encoder(edge_input).mean(-2)
         max_dist = edge_input.size(-2)
-        edge_input_flat = edge_input.permute(3, 0, 1, 2, 4).reshape(max_dist, -1, 8)
+        edge_input_flat = edge_input.permute(3, 0, 1, 2, 4).reshape(
+            max_dist, -1, self.latent_heads
+        )
         edge_input_flat = torch.bmm(
             edge_input_flat,
-            self.edge_dis_encoder.weight.reshape(-1, 8, 8)[:max_dist, :, :],
+            self.edge_dis_encoder.weight.reshape(
+                -1, self.latent_heads, self.latent_heads
+            )[:max_dist, :, :],
         )
-        edge_input = edge_input_flat.reshape(max_dist, 16, 128, 128, 8).permute(
-            1, 2, 3, 0, 4
-        )
+        edge_input = edge_input_flat.reshape(
+            max_dist, n_graph, n_node, n_node, 8
+        ).permute(1, 2, 3, 0, 4)
         edge_input = (
             edge_input.sum(-2) / (spatial_pos_.float().unsqueeze(-1))
         ).permute(0, 3, 1, 2)
 
         bias = edge_input + spatial_pos_bias.permute(0, 3, 1, 2)
-        data, mask = to_dense_batch(batch.x, batch.batch, max_num_nodes=128)
-        in_deg, _ = to_dense_batch(batch.indeg, batch.batch, max_num_nodes=128)
-        out_deg, _ = to_dense_batch(batch.outdeg, batch.batch, max_num_nodes=128)
+        graph_attn_bias += bias
+        graph_attn_bias += batch.attn_bias.unsqueeze(1)
+
+        # data, _ = to_dense_batch(batch.x + 1, batch.batch, max_num_nodes=128)
+        # del batch.x
+        # torch.cuda.empty_cache()
+        # in_deg, _ = to_dense_batch(batch.indeg, batch.batch, max_num_nodes=128)
+        # out_deg, _ = to_dense_batch(batch.outdeg, batch.batch, max_num_nodes=128)
 
         x = (
-            self.atom_encoder(data.squeeze(-1))
-            + self.embed_indegree(in_deg)
-            + self.embed_outdegree(out_deg)
+            self.atom_encoder(batch.x.squeeze(-1))
+            + self.embed_indegree(batch.in_degree)
+            + self.embed_outdegree(batch.out_degree)
         )
 
         # layers
 
-        for self_attns in self.layers:
+        for layer in self.layers:
 
-            x = self_attns[0](x, mask=mask, bias=bias) + x
-            x = self_attns[1](x) + x
+            x = layer(x, attn_bias=graph_attn_bias)
+            # x = self_attns[1](x) + x
+
+        x = self.final_ln(x)
 
         # to logits
         return self.to_out(x)

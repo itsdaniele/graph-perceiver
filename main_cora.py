@@ -1,24 +1,27 @@
 import pytorch_lightning as pl
-from perceiverio import PerceiverIO
+from model.classifier_io import PerceiverIOClassifier
+from torch_geometric.datasets import Planetoid
 
-from data import MyCoraDataset
 
-
-from torch_geometric.data import DataLoader
+from torch_geometric.loader import DataLoader
 
 from pytorch_lightning.loggers import WandbLogger
-
+import hydra
+from hydra.utils import get_original_cwd, to_absolute_path
+from omegaconf import DictConfig, OmegaConf
+import os
 
 wandb_logger = WandbLogger(project="graph-perceiver")
 
 
-def main():
+@hydra.main(config_path="conf", config_name="config")
+def main(cfg: DictConfig):
 
-    dataset = MyCoraDataset(root="../data/PubMed", name="PubMed", encoding="deg")
+    dataset = Planetoid(root=os.path.join(get_original_cwd(), "./data"), name="Cora")
 
     loader = DataLoader(dataset, batch_size=1, num_workers=32)
 
-    model = PerceiverIOClassifier(depth=8)
+    model = PerceiverIOClassifier(depth=3)
     trainer = pl.Trainer(
         gpus=1, max_epochs=200, log_every_n_steps=1, logger=wandb_logger
     )
