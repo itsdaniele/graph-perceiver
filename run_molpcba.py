@@ -1,25 +1,24 @@
-import pytorch_lightning as pl
-from pytorch_lightning import callbacks
-from pytorch_lightning.callbacks import ModelCheckpoint
 from model.classifier import PerceiverClassifier
 
-from torch_geometric.data import DataLoader
+from torch_geometric.loader import DataLoader
+
+import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning.callbacks import LearningRateMonitor
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 
 from ogb.graphproppred import Evaluator, PygGraphPropPredDataset
-import hydra
-from hydra.utils import get_original_cwd, to_absolute_path
-from omegaconf import DictConfig, OmegaConf
 
+import hydra
+from hydra.utils import get_original_cwd
+from omegaconf import DictConfig
 import os
 
+from util import log_hyperparameters
+
 import torch
+torch.multiprocessing.set_sharing_strategy('file_system')
 
-wandb_logger = WandbLogger(project="graph-perceiver")
-
-
-@hydra.main(config_path="conf", config_name="molhiv")
+@hydra.main(config_path="conf", config_name="molpcba")
 def main(cfg: DictConfig):
 
     evaluator = Evaluator(name=cfg.run.dataset)
@@ -71,25 +70,54 @@ def main(cfg: DictConfig):
         lr=cfg.model.lr,
     )
 
-    model = PerceiverClassifier.load_from_checkpoint(
-        checkpoint_path=os.path.join(
-            get_original_cwd(), "outputs/2022-02-14/17-18-40/checkpoints/last.ckpt",
-        ),
-    )
-
     if cfg.run.log:
 
-        exp_name = f"{cfg.run.dataset}+seed-{cfg.run.seed}"
+        exp_name = f"{cfg.run.dataset}+seed-{cfg.run.seed}-{cfg.run.name}"
         logger = WandbLogger(name=exp_name, project="graph-perceiver")
+
+    if cfg.run.dataset == "ogbg-molpcba":
+        monitor = "val/ap"
+    elif cfg.run.dataset == "ogbg-molhiv":
+        monitor = "val/rocauc"
+    checkpoint_callback = ModelCheckpoint(
+        monitor=monitor,
+        mode="max",
+        save_top_k=1,
+        save_last=True,
+        verbose=True,
+        dirpath="checkpoints",
+        filename="epoch_{epoch:03d}",
+    )
 
     trainer = pl.Trainer(
         gpus=cfg.train.gpus,
         max_epochs=cfg.train.epochs,
         logger=logger,
-        callbacks=[lr_monitor],
+        callbacks=[lr_monitor, checkpoint_callback],
     )
+
+    log_hyperparameters(
+        config=cfg,
+        model=model,
+        datamodule=None,
+        trainer=trainer,
+        callbacks=None,
+        logger=logger,
+    )
+    if not cfg.run.resume:
+        trainer.fit(
+            model, train_loader, valid_loader,
+        )
+    else:
+        trainer.fit(
+            model,
+            train_loader,
+            valid_loader,
+            ckpt_path=os.path.join(get_original_cwd(), cfg.run.checkpoint_path),
+        )
+
     if cfg.run.test:
-        trainer.test(model, test_dataloaders=test_loader)
+        trainer.test(test_dataloaders=test_loader)
 
 
 if __name__ == "__main__":

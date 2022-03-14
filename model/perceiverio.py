@@ -11,12 +11,10 @@ from einops import rearrange, repeat
 import torch
 import torch.nn.functional as F
 
-from torch_geometric.nn import GCNConv
 
+import math
 
-from ogb.graphproppred.mol_encoder import AtomEncoder, BondEncoder
-
-from .gnn import GNN_node_Virtualnode_no_batchnorm
+from .gnn import GCNCORA, GCNPROTEINS, SAGEPROTEINS
 
 
 def exists(val):
@@ -129,6 +127,15 @@ class Attention(nn.Module):
         return self.to_out(out)
 
 
+def init_params(module, n_layers):
+    if isinstance(module, nn.Linear):
+        module.weight.data.normal_(mean=0.0, std=0.02 / math.sqrt(n_layers))
+        if module.bias is not None:
+            module.bias.data.zero_()
+    if isinstance(module, nn.Embedding):
+        module.weight.data.normal_(mean=0.0, std=0.02)
+
+
 # main class
 
 
@@ -153,11 +160,11 @@ class PerceiverIO(nn.Module):
     ):
         super().__init__()
 
-        self.lin1 = nn.Linear(1433, gnn_embed_dim)
-        self.lin2 = nn.Linear(1433, gnn_embed_dim)
-        lin_queries = nn.Linear(1433, gnn_embed_dim)
-        self.gnn1 = GNN_node_Virtualnode_no_batchnorm(2, gnn_embed_dim, self.lin1, None)
+        # self.gnn1 = GCNCORA(gnn_embed_dim)
+        # self.gnn2 = GCNCORA(gnn_embed_dim)
 
+        self.gnn1 = GCNPROTEINS(gnn_embed_dim)
+        self.gnn2 = GCNPROTEINS(gnn_embed_dim)
         self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
 
         self.cross_attend_block = nn.ModuleList(
@@ -171,7 +178,7 @@ class PerceiverIO(nn.Module):
                         dim_head=cross_dim_head,
                         dropout=attn_dropout,
                     ),
-                    # context_dim=queries_dim,
+                    context_dim=queries_dim,
                 ),
                 PreNorm(latent_dim, FeedForward(latent_dim, dropout=ff_dropout)),
             ]
@@ -222,19 +229,15 @@ class PerceiverIO(nn.Module):
             nn.Linear(queries_dim, logits_dim) if exists(logits_dim) else nn.Identity()
         )
 
-        self.pos_emb = nn.Embedding(2708, gnn_embed_dim)
-        self.pos_emb_2 = nn.Embedding(2708, gnn_embed_dim)
+        # self.apply(lambda module: init_params(module, n_layers=depth))
 
     def forward(self, batch, mask=None, queries=None):
 
-        emb = self.pos_emb(torch.arange(2708, device=batch.x.device))
-        emb2 = self.pos_emb_2(torch.arange(2708, device=batch.x.device))
-        # emb_latents = self.pos_emb_latents(torch.arange(8, device=batch.x.device))
-
-        data = (self.gnn1(batch, training=self.training) + emb2).unsqueeze(0)
+        data = self.gnn1(batch, training=self.training).unsqueeze(0)
 
         if queries is None:
-            queries = (self.lin2(batch.x) + emb).unsqueeze(0)
+            queries = (self.gnn2(batch, training=self.training)).unsqueeze(0)
+            # queries = data
 
         b = data.shape[0]
         x = repeat(self.latents, "n d -> b n d", b=b)
@@ -265,5 +268,5 @@ class PerceiverIO(nn.Module):
 
         # final linear out
         logits = self.to_logits(latents)
-        return logits
+        return logits.squeeze(0)
 

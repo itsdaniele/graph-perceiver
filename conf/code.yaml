@@ -1,0 +1,31 @@
+run:
+  seed: 720
+  log: true
+  dataset: "ogbg-code2"
+  test: true
+  resume: false
+  checkpoint_path: 
+
+  batch_size: 16
+  
+
+data:
+  num_vocab: 5000
+  max_seq_len: 5
+
+train:
+  
+  gpus: 1
+  epochs: 100
+  num_workers: 32
+
+model:
+  input_channels: 64
+  gnn_emb_dim: 300
+  depth: 3
+  attn_dropout: 0.0
+  ff_dropout: 0.3
+  weight_tie_layers: false
+  virtual_latent: true
+  loss_fn: "multiclass"
+  lr: 0.0001

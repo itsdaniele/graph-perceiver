@@ -123,9 +123,6 @@ class Attention(nn.Module):
         return self.to_out(out)
 
 
-# main class
-
-
 def init_params(module, n_layers):
     if isinstance(module, nn.Linear):
         module.weight.data.normal_(mean=0.0, std=0.02 / math.sqrt(n_layers))
@@ -140,7 +137,8 @@ class Perceiver(nn.Module):
         self,
         *,
         depth,
-        input_channels=3,
+        input_channels,
+        num_classes,
         gnn_embed_dim=256,
         num_latents=512,
         latent_dim=512,
@@ -154,26 +152,56 @@ class Perceiver(nn.Module):
         self_per_cross_attn=1,
         final_head=True,
         virtual_latent=False,
-        num_classes=2
+        node_encoder_cls=None,
+        edge_encoder_cls=None,
+        max_seq_len=None
     ):
 
         super().__init__()
 
         self.virtual_latent = virtual_latent
+        self.max_seq_len = max_seq_len
 
-        dataset_name = "nci"
-
-        if dataset_name == "nci":
+        if node_encoder_cls is not None:
             self.gnn = GNN_node_Virtualnode(
-                3,
-                gnn_embed_dim,
-                torch.nn.Linear(input_channels, gnn_embed_dim),
-                BondEncoder,
+                3, gnn_embed_dim, node_encoder_cls(), edge_encoder_cls, gnn_type="gin"
             )
         else:
+            # default for molecular datasets
             self.gnn = GNN_node_Virtualnode(
                 3, gnn_embed_dim, AtomEncoder(gnn_embed_dim), BondEncoder
             )
+
+        # for code
+        self.gnn = GNN_node_Virtualnode(
+            4,
+            gnn_embed_dim,
+            node_encoder_cls(),
+            edge_encoder_cls,
+            gnn_type="gcn",
+            drop_ratio=0.0,
+        )
+
+        # if dataset_name == "nci":
+
+        #     def edge_encoder_cls(_):
+        #         def zero(_):
+        #             return 0
+
+        #         return zero
+
+        #     self.gnn = GNN_node_Virtualnode(
+        #         3,
+        #         gnn_embed_dim,
+        #         torch.nn.Linear(input_channels, gnn_embed_dim),
+        #         edge_encoder_cls,
+        #         gnn_type="gin",
+        #         drop_ratio=0.5,
+        #     )
+        # else:
+        #     self.gnn = GNN_node_Virtualnode(
+        #         3, gnn_embed_dim, AtomEncoder(gnn_embed_dim), BondEncoder
+        #     )
 
         self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
 
@@ -232,27 +260,39 @@ class Perceiver(nn.Module):
                 )
             )
 
-        # num_classes = 128 for molpcba
-
-        if not virtual_latent:
-            self.to_out = (
-                nn.Sequential(
-                    Reduce("b n d -> b d", "mean"),
-                    nn.LayerNorm(latent_dim),
-                    nn.Linear(latent_dim, num_classes),
+        # for ogbg-code
+        if max_seq_len is not None:
+            self.graph_pred_linear_list = torch.nn.ModuleList()
+            for i in range(max_seq_len):
+                self.graph_pred_linear_list.append(
+                    torch.nn.Linear(latent_dim, num_classes)
                 )
-                if final_head
-                else nn.Identity()
-            )
         else:
-            self.final_virtual = nn.Linear(latent_dim, num_classes)
+            if not virtual_latent:
+                self.to_out = (
+                    nn.Sequential(
+                        nn.LayerNorm(latent_dim), nn.Linear(latent_dim, num_classes),
+                    )
+                    if final_head
+                    else nn.Identity()
+                )
+            else:
+                self.final_virtual = nn.Linear(latent_dim, num_classes)
 
         self.apply(lambda module: init_params(module, n_layers=depth))
 
     def forward(self, batch):
 
         data = self.gnn(batch)
-        data, mask = to_dense_batch(data, batch.batch, max_num_nodes=256)
+
+        num_nodes = []
+        for i in range(len(batch.batch)):
+            mask = batch.batch.eq(i)
+            num_node = mask.sum()
+            num_nodes.append(num_node)
+
+        ###>3000 for molecukes
+        data, mask = to_dense_batch(data, batch.batch, max_num_nodes=max(num_nodes))
 
         b = data.shape[0]
         x = repeat(self.latents, "n d -> b n d", b=b)
@@ -267,6 +307,15 @@ class Perceiver(nn.Module):
                 x = self_attn(x) + x
                 x = self_ff(x) + x
 
-        # out = self.to_out(x).sum(-2) / mask.sum(-1, keepdim=True)
-        out = self.final_virtual(x)[:, 0, :]
-        return out
+        if self.max_seq_len is None:
+            if self.virtual_latent:
+                out = self.final_virtual(x)[:, 0, :]
+            else:
+                out = self.to_out(x).sum(-2) / mask.sum(-1, keepdim=True)
+            return out
+        else:
+            pred_list = []
+            for i in range(self.max_seq_len):
+                pred_list.append(self.graph_pred_linear_list[i](x)[:, 0, :])
+
+            return pred_list

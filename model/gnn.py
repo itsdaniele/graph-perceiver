@@ -11,6 +11,7 @@ from torch_geometric.nn import (
 from torch_geometric.nn.inits import uniform
 
 from .modules import GCNConv, GINConv
+from torch_geometric.nn import GCNConv as GCNConvGeometric, SAGEConv
 
 ### Virtual GNN to generate node embedding
 class GNN_node_Virtualnode(torch.nn.Module):
@@ -167,6 +168,95 @@ class GNN_node_Virtualnode(torch.nn.Module):
 
 
 from torch_geometric.utils.dropout import dropout_adj
+
+
+class SAGEPROTEINS(torch.nn.Module):
+    def __init__(self, emb_dim):
+        super().__init__()
+        self.conv1 = SAGEConv(8, emb_dim)
+        self.conv2 = SAGEConv(emb_dim, emb_dim)
+        self.conv3 = SAGEConv(emb_dim, emb_dim)
+        # self.conv3 = GCNConvGeometric(emb_dim, 112, normalize=False)
+
+    def reset_parameters(self):
+        for conv in self.convs:
+            conv.reset_parameters()
+
+    def forward(self, data, training=False):
+        x, adj_t = data.x, data.adj_t
+
+        x = self.conv1(x, adj_t)
+        x = F.relu(x)
+        # x = F.dropout(x, p=0.5, training=training)
+        x = self.conv2(x, adj_t)
+        x = F.relu(x)
+        # x = F.dropout(x, p=0.5, training=training)
+        x = self.conv3(x, adj_t)
+
+        return x
+
+
+class GCNPROTEINS(torch.nn.Module):
+    def __init__(self, emb_dim):
+        super().__init__()
+        self.conv1 = GCNConvGeometric(8, emb_dim, normalize=False)
+        self.conv2 = GCNConvGeometric(emb_dim, emb_dim, normalize=False)
+        self.conv3 = GCNConvGeometric(emb_dim, emb_dim, normalize=False)
+        # self.conv3 = GCNConvGeometric(emb_dim, 112, normalize=False)
+
+    def reset_parameters(self):
+        for conv in self.convs:
+            conv.reset_parameters()
+
+    def forward(self, data, training=False):
+        x, adj_t = data.x, data.adj_t
+
+        x = self.conv1(x, adj_t)
+        x = F.relu(x)
+        x = F.dropout(x, p=0.1, training=training)
+        x = self.conv2(x, adj_t)
+        x = F.relu(x)
+        x = F.dropout(x, p=0.1, training=training)
+        x = self.conv3(x, adj_t)
+
+        return x
+
+
+class GCNCORA(torch.nn.Module):
+    def __init__(self, emb_dim):
+        super().__init__()
+        self.conv1 = GCNConvGeometric(128, emb_dim)
+        self.conv2 = GCNConvGeometric(emb_dim, emb_dim)
+        self.conv3 = GCNConvGeometric(emb_dim, emb_dim)
+
+        self.bns = torch.nn.ModuleList()
+        self.bns.append(torch.nn.BatchNorm1d(emb_dim))
+        self.bns.append(torch.nn.BatchNorm1d(emb_dim))
+
+    def reset_parameters(self):
+        for conv in self.convs:
+            conv.reset_parameters()
+        for bn in self.bns:
+            bn.reset_parameters()
+
+    def forward(self, data, training=False):
+        x, edge_index = data.x, data.edge_index
+
+        # edge_index, _ = dropout_adj(
+        #     edge_index, p=0.1, training=training, force_undirected=True
+        # )
+
+        x = self.conv1(x, edge_index)
+        x = self.bns[0](x)
+        x = F.relu(x)
+        x = F.dropout(x, p=0.5, training=training)
+        x = self.conv2(x, edge_index)
+        x = self.bns[1](x)
+        x = F.relu(x)
+        x = F.dropout(x, p=0.5, training=training)
+        x = self.conv3(x, edge_index)
+
+        return x
 
 
 class GNN_node_Virtualnode_no_batchnorm(torch.nn.Module):

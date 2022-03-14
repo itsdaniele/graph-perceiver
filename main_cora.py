@@ -14,14 +14,14 @@ import os
 wandb_logger = WandbLogger(project="graph-perceiver")
 
 
-@hydra.main(config_path="conf", config_name="config")
+@hydra.main(config_path="conf", config_name="molhiv")
 def main(cfg: DictConfig):
 
     dataset = Planetoid(root=os.path.join(get_original_cwd(), "./data"), name="Cora")
 
     loader = DataLoader(dataset, batch_size=1, num_workers=32)
 
-    model = PerceiverIOClassifier(depth=3)
+    model = PerceiverIOClassifier(depth=1)
     trainer = pl.Trainer(
         gpus=1, max_epochs=200, log_every_n_steps=1, logger=wandb_logger
     )

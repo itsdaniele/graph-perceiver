@@ -1,0 +1,5 @@
+run:
+  seed: 42
+  log: true
+
+model:

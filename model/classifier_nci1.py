@@ -12,14 +12,14 @@ class PerceiverClassifier(pl.LightningModule):
     def __init__(
         self,
         input_channels=64,
-        gnn_embed_dim=32,
+        gnn_embed_dim=64,
         depth=8,
-        num_latents=8,
-        latent_dim=32,
-        cross_heads=4,
-        latent_heads=4,
-        cross_dim_head=4,
-        latent_dim_head=4,
+        num_latents=12,
+        latent_dim=40,
+        cross_heads=8,
+        latent_heads=8,
+        cross_dim_head=8,
+        latent_dim_head=8,
         attn_dropout=0.0,
         ff_dropout=0.0,
         weight_tie_layers=False,
@@ -28,12 +28,15 @@ class PerceiverClassifier(pl.LightningModule):
         num_classes=2,
         virtual_latent=False,
         evaluator=None,
+        train_loader=None,
     ):
         super().__init__()
 
         self.save_hyperparameters()
         self.loss_fn = loss_fn
         self.evaluator = evaluator
+
+        self.train_loader = train_loader
 
         self.perceiver = Perceiver(
             input_channels=input_channels,
@@ -66,9 +69,8 @@ class PerceiverClassifier(pl.LightningModule):
         #     "y_pred": y_hat.detach().cpu(),
         # }
         self.log("train/loss", loss, on_step=False, on_epoch=True)
-        # self.log(
-        #     "train/acc", self.evaluator.eval(res)["ap"], on_step=False, on_epoch=True,
-        # )
+        acc = torchmetrics.functional.accuracy(torch.argmax(y_hat, dim=-1), batch.y)
+        self.log("train/acc", acc, on_step=True, on_epoch=False)
         return loss
 
     def evaluate(self, batch, stage=None):
@@ -78,6 +80,9 @@ class PerceiverClassifier(pl.LightningModule):
         y_hat = self(batch)
 
         loss = self.loss_fn(y_hat, batch.y)
+
+        acc = torchmetrics.functional.accuracy(torch.argmax(y_hat, dim=-1), batch.y)
+        self.log(f"{stage}/acc", acc)
         self.log(f"{stage}/loss", loss)
 
         # res = {
@@ -97,5 +102,10 @@ class PerceiverClassifier(pl.LightningModule):
         return self.evaluate(batch, "test")
 
     def configure_optimizers(self):
+
         optimizer = torch.optim.Adam(self.parameters(), lr=0.0001)
-        return [optimizer]
+
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, 100 * len(self.train_loader), verbose=True
+        )
+        return [optimizer], [scheduler]

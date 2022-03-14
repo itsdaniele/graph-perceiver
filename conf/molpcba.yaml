@@ -1,0 +1,28 @@
+run:
+  seed: 33
+  log: true
+  dataset: "ogbg-molpcba"
+  name: "newseed"
+  test: true
+  resume: false
+  checkpoint_path: 
+
+  batch_size_train: 256
+  batch_size_val: 1024
+  batch_size_test: 256
+
+train:
+  
+  gpus: 1
+  epochs: 100
+  num_workers: 32
+
+model:
+  input_channels: 64
+  depth: 4
+  attn_dropout: 0.0
+  ff_dropout: 0.1
+  weight_tie_layers: false
+  virtual_latent: true
+  loss_fn: "bce"
+  lr: 0.0001
