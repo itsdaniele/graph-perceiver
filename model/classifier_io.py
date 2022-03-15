@@ -27,8 +27,8 @@ class PerceiverIOClassifier(pl.LightningModule):
         latent_dim_head=8,
         logits_dim=7,
         decoder_ff=True,
-        attn_dropout=0.1,
-        ff_dropout=0.1,
+        attn_dropout=0.0,
+        ff_dropout=0.0,
         weight_tie_layers=False,
         dataset="cora",
         train_mask=None,
@@ -85,7 +85,7 @@ class PerceiverIOClassifier(pl.LightningModule):
             # acc = torchmetrics.functional.accuracy(torch.argmax(y_hat, dim=-2), y)
             # self.log("train/acc", acc, batch_size=1)
             self.log("train/loss", loss, batch_size=1)
-        elif self.dataset == "proteins":
+        elif self.dataset == "ogbn-proteins":
 
             y_hat = self(batch)
             y_hat_train = y_hat[self.train_mask]
@@ -128,7 +128,7 @@ class PerceiverIOClassifier(pl.LightningModule):
             self.log("val/acc", acc, batch_size=1)
             self.log("val/loss", loss, batch_size=1)
 
-        elif self.dataset == "proteins":
+        elif self.dataset == "ogbn-proteins":
             y_hat = self(batch)
             y_hat_val = y_hat[self.val_mask]
 
@@ -147,7 +147,7 @@ class PerceiverIOClassifier(pl.LightningModule):
         return self.evaluate(batch, "val")
 
     def test_step(self, batch, batch_idx):
-        if self.dataset == "proteins":
+        if self.dataset == "ogbn-proteins":
             y_hat = self(batch)
             y_hat_val = y_hat[self.test_mask]
 
@@ -159,13 +159,23 @@ class PerceiverIOClassifier(pl.LightningModule):
             self.log("test/rocauc", rocauc, batch_size=1)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=0.0005)
 
+        # l1 = list(filter(lambda kv: "gnn" in kv[0], self.named_parameters()))
+        # l2 = list(filter(lambda kv: "gnn" not in kv[0], self.named_parameters()))
+
+        # optimizer = torch.optim.Adam(
+        #     [
+        #         {"params": [i[1] for i in l1], "lr": 0.01},
+        #         {"params": [i[1] for i in l2], "lr": 0.0005},
+        #     ]
+        # )
+
+        optimizer = torch.optim.Adam(self.parameters(), lr=0.0005)
         scheduler_poly_lr_decay = PolynomialLRDecay(
-            optimizer, max_decay_steps=100, end_learning_rate=0.00001, power=2.0
+            optimizer, max_decay_steps=100, end_learning_rate=0.0001, power=1.0
         )
 
         # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         #     optimizer, 1000, eta_min=0.00001, last_epoch=-1, verbose=False
         # )
-        return [optimizer]
+        return [optimizer], [scheduler_poly_lr_decay]

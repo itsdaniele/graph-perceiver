@@ -1,34 +1,31 @@
 run:
-
   name: "proteins"
   seed: 42
   log: true
   dataset: "ogbn-proteins"
   test: true
   resume: false
-  checkpoint_path: 
+  checkpoint_path: "outputs/2022-03-14/20-16-11/checkpoints/epoch_epoch=1654.ckpt"
+  test_only: false
 
-  batch_size: 128
 
 train:
   gpus: 1
-  epochs: 100
+  epochs: 10000
   num_workers: 32
 
 model:
-  input_channels: 64
-  depth: 4
-  attn_dropout: 0.1
+  
+  depth: 1
+  logits_dim: 112
+  attn_dropout: 0.0
   ff_dropout: 0.1
-  weight_tie_layers: false
-  virtual_latent: true
   gnn_embed_dim: 256
-  num_latents: 12
-  latent_dim: 200
-  cross_heads: 8
-  latent_heads: 8
+  num_latents: 256
+  latent_dim: 256
+  cross_heads: 4
+  latent_heads: 4
   cross_dim_head: 8
   latent_dim_head: 8
-  loss_fn: "bce"
   lr: 0.0001
   

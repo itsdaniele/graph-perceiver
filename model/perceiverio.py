@@ -229,11 +229,13 @@ class PerceiverIO(nn.Module):
             nn.Linear(queries_dim, logits_dim) if exists(logits_dim) else nn.Identity()
         )
 
-        # self.apply(lambda module: init_params(module, n_layers=depth))
+        self.apply(lambda module: init_params(module, n_layers=depth))
 
     def forward(self, batch, mask=None, queries=None):
 
         data = self.gnn1(batch, training=self.training).unsqueeze(0)
+
+        # return data.squeeze(0)
 
         if queries is None:
             queries = (self.gnn2(batch, training=self.training)).unsqueeze(0)

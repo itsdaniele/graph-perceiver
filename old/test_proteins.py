@@ -19,7 +19,7 @@ import torch
 wandb_logger = WandbLogger(project="graph-perceiver")
 
 
-@hydra.main(config_path="conf", config_name="molhiv")
+@hydra.main(config_path="conf", config_name="proteins")
 def main(cfg: DictConfig):
 
     dataset = PygNodePropPredDataset(
@@ -29,12 +29,7 @@ def main(cfg: DictConfig):
     )
 
     split_idx = dataset.get_idx_split()
-
-    train_idx, valid_idx, test_idx = (
-        split_idx["train"],
-        split_idx["valid"],
-        split_idx["test"],
-    )
+    test_idx = split_idx["test"]
 
     data = dataset[0]
     data.x = data.adj_t.mean(dim=1)
@@ -55,7 +50,7 @@ def main(cfg: DictConfig):
     model = PerceiverIOClassifier.load_from_checkpoint(
         checkpoint_path=os.path.join(
             get_original_cwd(),
-            "outputs/2022-03-10/proteins_perceiverio_better/graph-perceiver/3vkzl35a/checkpoints/epoch=899-step=899.ckpt",
+            "outputs/2022-03-14/18-19-33/graph-perceiver/3q34z3pg/checkpoints/epoch=999-step=999.ckpt",
         )
     )
 

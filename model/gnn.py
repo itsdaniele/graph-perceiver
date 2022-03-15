@@ -213,10 +213,10 @@ class GCNPROTEINS(torch.nn.Module):
 
         x = self.conv1(x, adj_t)
         x = F.relu(x)
-        x = F.dropout(x, p=0.1, training=training)
+        x = F.dropout(x, p=0.0, training=training)
         x = self.conv2(x, adj_t)
         x = F.relu(x)
-        x = F.dropout(x, p=0.1, training=training)
+        x = F.dropout(x, p=0.0, training=training)
         x = self.conv3(x, adj_t)
 
         return x
