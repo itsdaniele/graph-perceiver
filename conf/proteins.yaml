@@ -1,17 +1,16 @@
 run:
-  name: "proteins"
-  seed: 42
+  name: "reproduce_mat_sage"
+  seed: 1337
   log: true
   dataset: "ogbn-proteins"
-  test: true
   resume: false
-  checkpoint_path: "outputs/2022-03-14/20-16-11/checkpoints/epoch_epoch=1654.ckpt"
+  checkpoint_path:
   test_only: false
 
 
 train:
   gpus: 1
-  epochs: 10000
+  epochs: 1000
   num_workers: 32
 
 model:
@@ -21,8 +20,8 @@ model:
   attn_dropout: 0.0
   ff_dropout: 0.1
   gnn_embed_dim: 256
-  num_latents: 256
-  latent_dim: 256
+  num_latents: 512
+  latent_dim: 32
   cross_heads: 4
   latent_heads: 4
   cross_dim_head: 8

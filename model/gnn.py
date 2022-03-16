@@ -11,7 +11,7 @@ from torch_geometric.nn import (
 from torch_geometric.nn.inits import uniform
 
 from .modules import GCNConv, GINConv
-from torch_geometric.nn import GCNConv as GCNConvGeometric, SAGEConv
+from torch_geometric.nn import GCNConv as GCNConvGeometric, SAGEConv, GATConv
 
 ### Virtual GNN to generate node embedding
 class GNN_node_Virtualnode(torch.nn.Module):
@@ -175,12 +175,30 @@ class SAGEPROTEINS(torch.nn.Module):
         super().__init__()
         self.conv1 = SAGEConv(8, emb_dim)
         self.conv2 = SAGEConv(emb_dim, emb_dim)
-        self.conv3 = SAGEConv(emb_dim, emb_dim)
-        # self.conv3 = GCNConvGeometric(emb_dim, 112, normalize=False)
+        # self.conv3 = SAGEConv(emb_dim, emb_dim)
+        self.conv3 = SAGEConv(emb_dim, 112)
 
-    def reset_parameters(self):
-        for conv in self.convs:
-            conv.reset_parameters()
+    def forward(self, data, training=False):
+        x, adj_t = data.x, data.adj_t
+
+        x = self.conv1(x, adj_t)
+        x = F.relu(x)
+        # x = F.dropout(x, p=0.5, training=training)
+        x = self.conv2(x, adj_t)
+        x = F.relu(x)
+        # x = F.dropout(x, p=0.5, training=training)
+        x = self.conv3(x, adj_t)
+
+        return x
+
+
+class SAGEPROTEINSEMBED(torch.nn.Module):
+    def __init__(self, emb_dim):
+        super().__init__()
+        self.conv1 = SAGEConv(8, emb_dim)
+        self.conv2 = SAGEConv(emb_dim, emb_dim)
+        self.conv3 = SAGEConv(emb_dim, emb_dim)
+        # self.conv3 = SAGEConv(emb_dim, 112)
 
     def forward(self, data, training=False):
         x, adj_t = data.x, data.adj_t
@@ -202,6 +220,32 @@ class GCNPROTEINS(torch.nn.Module):
         self.conv1 = GCNConvGeometric(8, emb_dim, normalize=False)
         self.conv2 = GCNConvGeometric(emb_dim, emb_dim, normalize=False)
         self.conv3 = GCNConvGeometric(emb_dim, emb_dim, normalize=False)
+        # self.conv3 = GCNConvGeometric(emb_dim, 112, normalize=False)
+
+    def reset_parameters(self):
+        for conv in self.convs:
+            conv.reset_parameters()
+
+    def forward(self, data, training=False):
+        x, adj_t = data.x, data.adj_t
+
+        x = self.conv1(x, adj_t)
+        x = F.relu(x)
+        x = F.dropout(x, p=0.0, training=training)
+        x = self.conv2(x, adj_t)
+        x = F.relu(x)
+        x = F.dropout(x, p=0.0, training=training)
+        x = self.conv3(x, adj_t)
+
+        return x
+
+
+class GATPROTEINS(torch.nn.Module):
+    def __init__(self, emb_dim):
+        super().__init__()
+        self.conv1 = GATConv(8, emb_dim)
+        self.conv2 = GATConv(emb_dim, emb_dim)
+        self.conv3 = GATConv(emb_dim, emb_dim)
         # self.conv3 = GCNConvGeometric(emb_dim, 112, normalize=False)
 
     def reset_parameters(self):

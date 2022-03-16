@@ -45,12 +45,12 @@ def main(cfg: DictConfig):
     data.adj_t.set_value_(None)
 
     # Pre-compute GCN normalization.
-    adj_t = data.adj_t.set_diag()
-    deg = adj_t.sum(dim=1).to(torch.float)
-    deg_inv_sqrt = deg.pow(-0.5)
-    deg_inv_sqrt[deg_inv_sqrt == float("inf")] = 0
-    adj_t = deg_inv_sqrt.view(-1, 1) * adj_t * deg_inv_sqrt.view(1, -1)
-    data.adj_t = adj_t
+    # adj_t = data.adj_t.set_diag()
+    # deg = adj_t.sum(dim=1).to(torch.float)
+    # deg_inv_sqrt = deg.pow(-0.5)
+    # deg_inv_sqrt[deg_inv_sqrt == float("inf")] = 0
+    # adj_t = deg_inv_sqrt.view(-1, 1) * adj_t * deg_inv_sqrt.view(1, -1)
+    # data.adj_t = adj_t
 
     dataset = [data]
 
@@ -60,7 +60,7 @@ def main(cfg: DictConfig):
 
     if cfg.run.log:
 
-        exp_name = f"{cfg.run.dataset}+seed-{cfg.run.seed}-{cfg.run.name}"
+        exp_name = f"{cfg.run.dataset}+seed-{cfg.run.seed}+{cfg.run.name}"
         logger = WandbLogger(name=exp_name, project="graph-perceiver")
 
     if cfg.run.dataset == "ogbn-proteins":
@@ -91,6 +91,8 @@ def main(cfg: DictConfig):
         latent_heads=cfg.model.latent_heads,
         cross_dim_head=cfg.model.cross_dim_head,
         latent_dim_head=cfg.model.latent_dim_head,
+        ff_dropout=cfg.model.ff_dropout,
+        lr=cfg.model.lr,
     )
     trainer = pl.Trainer(
         gpus=cfg.train.gpus,
@@ -125,6 +127,9 @@ def main(cfg: DictConfig):
         trainer.fit(
             model, train_loader, train_loader,
         )
+
+        # save gnn
+        torch.save(model.perceiver.gnn1, os.path.join(get_original_cwd(), "sage.pt"))
     else:
         trainer.fit(
             model,

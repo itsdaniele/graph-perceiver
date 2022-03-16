@@ -14,7 +14,7 @@ import torch.nn.functional as F
 
 import math
 
-from .gnn import GCNCORA, GCNPROTEINS, SAGEPROTEINS
+from .gnn import GCNCORA, GCNPROTEINS, SAGEPROTEINS, GATPROTEINS
 
 
 def exists(val):
@@ -157,14 +157,26 @@ class PerceiverIO(nn.Module):
         decoder_ff,
         attn_dropout,
         ff_dropout,
+        gnn_encoder,
     ):
         super().__init__()
 
-        # self.gnn1 = GCNCORA(gnn_embed_dim)
-        # self.gnn2 = GCNCORA(gnn_embed_dim)
+        if gnn_encoder is None:
+            # self.gnn1 = GCNCORA(gnn_embed_dim)
+            # self.gnn2 = GCNCORA(gnn_embed_dim)
 
-        self.gnn1 = GCNPROTEINS(gnn_embed_dim)
-        self.gnn2 = GCNPROTEINS(gnn_embed_dim)
+            # self.gnn1 = GCNPROTEINS(gnn_embed_dim)
+            # self.gnn2 = GCNPROTEINS(gnn_embed_dim)
+
+            self.gnn1 = SAGEPROTEINS(gnn_embed_dim)
+            self.gnn2 = SAGEPROTEINS(gnn_embed_dim)
+
+            # self.gnn1 = GATPROTEINS(gnn_embed_dim)
+            # self.gnn2 = GATPROTEINS(gnn_embed_dim)
+
+        else:
+            self.gnn1 = gnn_encoder
+            self.out_gnn = nn.Linear(gnn_embed_dim, logits_dim)
         self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
 
         self.cross_attend_block = nn.ModuleList(
@@ -229,17 +241,21 @@ class PerceiverIO(nn.Module):
             nn.Linear(queries_dim, logits_dim) if exists(logits_dim) else nn.Identity()
         )
 
-        self.apply(lambda module: init_params(module, n_layers=depth))
+        # self.apply(lambda module: init_params(module, n_layers=depth))
 
     def forward(self, batch, mask=None, queries=None):
 
-        data = self.gnn1(batch, training=self.training).unsqueeze(0)
-
+        # this is done just for pretraining the gnn
+        # data = self.out_gnn(F.relu(self.gnn1(batch, training=self.training))).unsqueeze(
+        #     0
+        # )
         # return data.squeeze(0)
 
+        data = self.gnn1(batch, training=self.training).unsqueeze(0)
+
         if queries is None:
-            queries = (self.gnn2(batch, training=self.training)).unsqueeze(0)
-            # queries = data
+            # queries = (self.gnn2(batch, training=self.training)).unsqueeze(0)
+            queries = data
 
         b = data.shape[0]
         x = repeat(self.latents, "n d -> b n d", b=b)
