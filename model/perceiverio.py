@@ -14,7 +14,15 @@ import torch.nn.functional as F
 
 import math
 
-from .gnn import GCNCORA, GCNPROTEINS, SAGEPROTEINS, GATPROTEINS
+from .gnn import (
+    GCNCORA,
+    GCNPROTEINS,
+    SAGEPROTEINS,
+    GATPROTEINS,
+    NNCONVPROTEINS,
+    SAGEPROTEINSEMBED,
+    GCNARXIV,
+)
 
 
 def exists(val):
@@ -67,9 +75,11 @@ class GEGLU(nn.Module):
         x, gates = x.chunk(2, dim=-1)
         return x * F.gelu(gates)
 
+        # return F.gelu(x)
+
 
 class FeedForward(nn.Module):
-    def __init__(self, dim, mult=4, dropout=0.0):
+    def __init__(self, dim, mult=2, dropout=0.0):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(dim, dim * mult * 2),
@@ -168,8 +178,14 @@ class PerceiverIO(nn.Module):
             # self.gnn1 = GCNPROTEINS(gnn_embed_dim)
             # self.gnn2 = GCNPROTEINS(gnn_embed_dim)
 
-            self.gnn1 = SAGEPROTEINS(gnn_embed_dim)
-            self.gnn2 = SAGEPROTEINS(gnn_embed_dim)
+            self.gnn1 = SAGEPROTEINSEMBED(gnn_embed_dim)
+            self.gnn2 = SAGEPROTEINSEMBED(gnn_embed_dim)
+
+            self.gnn1 = GCNARXIV(gnn_embed_dim)
+            self.gnn2 = GCNARXIV(gnn_embed_dim)
+
+            # self.gnn1 = NNCONVPROTEINS(gnn_embed_dim)
+            # self.gnn2 = NNCONVPROTEINS(gnn_embed_dim)
 
             # self.gnn1 = GATPROTEINS(gnn_embed_dim)
             # self.gnn2 = GATPROTEINS(gnn_embed_dim)
@@ -254,8 +270,8 @@ class PerceiverIO(nn.Module):
         data = self.gnn1(batch, training=self.training).unsqueeze(0)
 
         if queries is None:
-            # queries = (self.gnn2(batch, training=self.training)).unsqueeze(0)
-            queries = data
+            queries = (self.gnn2(batch, training=self.training)).unsqueeze(0)
+            # queries = data
 
         b = data.shape[0]
         x = repeat(self.latents, "n d -> b n d", b=b)

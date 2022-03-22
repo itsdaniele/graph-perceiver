@@ -22,7 +22,7 @@ import torch
 
 
 @hydra.main(config_path="conf", config_name="proteins")
-def main(cfg: DictConfig):
+def main(cfg: DictConfig): 
 
     pl.seed_everything(cfg.run.seed)
 
@@ -129,7 +129,7 @@ def main(cfg: DictConfig):
         )
 
         # save gnn
-        torch.save(model.perceiver.gnn1, os.path.join(get_original_cwd(), "sage.pt"))
+    # torch.save(model.perceiver.gnn1, os.path.join(get_original_cwd(), "sage.pt"))
     else:
         trainer.fit(
             model,

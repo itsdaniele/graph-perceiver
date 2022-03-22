@@ -53,9 +53,12 @@ class PerceiverIOClassifier(pl.LightningModule):
 
         queries_dim = gnn_embed_dim
         self.dataset = dataset
+        self.evaluator = Evaluator(name=dataset)
 
-        gnn = SAGEPROTEINSEMBED(gnn_embed_dim)
-        gnn = torch.load(os.path.join(get_original_cwd(), "sage.pt"))
+        # gnn = SAGEPROTEINSEMBED(gnn_embed_dim)
+        # gnn = torch.load(os.path.join(get_original_cwd(), "sage.pt"))
+
+        gnn = None
 
         self.perceiver = PerceiverIO(
             gnn_embed_dim=gnn_embed_dim,
@@ -90,13 +93,20 @@ class PerceiverIOClassifier(pl.LightningModule):
             self.log("train/loss", loss)
 
         elif self.dataset == "ogbn-arxiv":
-            y_hat = self(batch)[:, self.train_mask].transpose(1, 2)
-            y = batch.y[self.train_mask].squeeze(-1).unsqueeze(0)
-            loss = F.cross_entropy(y_hat, y)
+            y_hat = self(batch)[self.train_mask]
+            y = batch.y[self.train_mask].squeeze(-1)
+            train_loss = F.cross_entropy(y_hat, y)
 
-            # acc = torchmetrics.functional.accuracy(torch.argmax(y_hat, dim=-2), y)
-            # self.log("train/acc", acc, batch_size=1)
-            self.log("train/loss", loss, batch_size=1)
+            acc = self.evaluator.eval(
+                {
+                    "y_true": batch.y[self.val_mask],
+                    "y_pred": self(batch)
+                    .squeeze(0)
+                    .argmax(dim=-1, keepdim=True)[self.val_mask],
+                }
+            )["acc"]
+            self.log("train/acc", acc, batch_size=1)
+            self.log("train/loss", train_loss, batch_size=1)
         elif self.dataset == "ogbn-proteins":
 
             y_hat = self(batch)
@@ -122,14 +132,12 @@ class PerceiverIOClassifier(pl.LightningModule):
 
         elif self.dataset == "ogbn-arxiv":
 
-            y_hat = self(batch)[:, self.val_mask].transpose(1, 2)
+            y_hat = self(batch)[self.val_mask]
 
-            y = batch.y[self.val_mask].squeeze(-1).unsqueeze(0)
+            y = batch.y[self.val_mask].squeeze(-1)
             loss = F.cross_entropy(y_hat, y)
 
-            evaluator = Evaluator(name="ogbn-arxiv")
-
-            acc = evaluator.eval(
+            acc = self.evaluator.eval(
                 {
                     "y_true": batch.y[self.val_mask],
                     "y_pred": self(batch)
@@ -147,9 +155,7 @@ class PerceiverIOClassifier(pl.LightningModule):
             y = batch.y[self.val_mask].float()
             val_loss = F.binary_cross_entropy_with_logits(y_hat_val, y)
 
-            evaluator = Evaluator(name="ogbn-proteins")
-
-            rocauc = evaluator.eval(
+            rocauc = self.evaluator.eval(
                 {"y_true": batch.y[self.val_mask], "y_pred": y_hat_val}
             )["rocauc"]
             self.log("val/rocauc", rocauc, batch_size=1)
@@ -163,9 +169,7 @@ class PerceiverIOClassifier(pl.LightningModule):
             y_hat = self(batch)
             y_hat_val = y_hat[self.test_mask]
 
-            evaluator = Evaluator(name="ogbn-proteins")
-
-            rocauc = evaluator.eval(
+            rocauc = self.evaluator.eval(
                 {"y_true": batch.y[self.test_mask], "y_pred": y_hat_val}
             )["rocauc"]
             self.log("test/rocauc", rocauc, batch_size=1)

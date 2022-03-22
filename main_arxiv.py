@@ -11,19 +11,25 @@ from hydra.utils import get_original_cwd
 from omegaconf import DictConfig
 import os
 
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+
 from ogb.nodeproppred import PygNodePropPredDataset
-from ogb.nodeproppred import Evaluator
+
+from util import log_hyperparameters
+
 
 import torch
 
 wandb_logger = WandbLogger(project="graph-perceiver")
 
 
-@hydra.main(config_path="conf", config_name="molhiv")
+@hydra.main(config_path="conf", config_name="arxiv")
 def main(cfg: DictConfig):
 
+    pl.seed_everything(cfg.run.seed)
+
     dataset = PygNodePropPredDataset(
-        name="ogbn-arxiv",
+        name=cfg.run.dataset,
         root=os.path.join(get_original_cwd(), "./data",),
         transform=T.ToSparseTensor(),
     )
@@ -38,39 +44,93 @@ def main(cfg: DictConfig):
 
     data = dataset[0]
     data.adj_t = data.adj_t.to_symmetric()
-    # data.adj_t = []
-    row, col, edge_attr = data.adj_t.t().coo()
-    data.edge_index = torch.stack([row, col], dim=0)
 
     dataset = [data]
 
-    evaluator = Evaluator(name="ogbn-arxiv")
-    print(evaluator.expected_input_format)
-    print(evaluator.expected_output_format)
-
     train_loader = DataLoader(dataset, batch_size=1, num_workers=32)
-    # valid_loader = DataLoader(dataset[valid_idx], batch_size=1, num_workers=32)
-    # test_loader = DataLoader(dataset[test_idx], batch_size=1, num_workers=32)
+    lr_monitor = LearningRateMonitor(logging_interval="step")
+
+    if cfg.run.log:
+
+        exp_name = f"{cfg.run.dataset}+seed-{cfg.run.seed}+{cfg.run.name}"
+        logger = WandbLogger(name=exp_name, project="graph-perceiver")
+
+    if cfg.run.dataset == "ogbn-proteins":
+        monitor = "val/rocauc"
+    elif cfg.run.dataset == "ogbn-arxiv":
+        monitor = "val/acc"
+    checkpoint_callback = ModelCheckpoint(
+        monitor=monitor,
+        mode="max",
+        save_top_k=1,
+        save_last=True,
+        verbose=True,
+        dirpath="checkpoints",
+        filename="epoch_{epoch:03d}",
+    )
 
     model = PerceiverIOClassifier(
-        depth=4,
+        depth=cfg.model.depth,
         train_mask=train_idx,
         val_mask=valid_idx,
-        dataset="arxiv",
-        logits_dim=40,
-        gnn_embed_dim=128,
-        num_latents=800,
-        latent_dim=8,
-        cross_heads=4,
-        latent_heads=4,
-        cross_dim_head=8,
-        latent_dim_head=8,
+        test_mask=test_idx,
+        dataset=cfg.run.dataset,
+        logits_dim=cfg.model.logits_dim,
+        gnn_embed_dim=cfg.model.gnn_embed_dim,
+        num_latents=cfg.model.num_latents,
+        latent_dim=cfg.model.latent_dim,
+        cross_heads=cfg.model.cross_heads,
+        latent_heads=cfg.model.latent_heads,
+        cross_dim_head=cfg.model.cross_dim_head,
+        latent_dim_head=cfg.model.latent_dim_head,
+        ff_dropout=cfg.model.ff_dropout,
+        lr=cfg.model.lr,
     )
     trainer = pl.Trainer(
-        gpus=1, max_epochs=1000, log_every_n_steps=1, logger=wandb_logger
+        gpus=cfg.train.gpus,
+        max_epochs=cfg.train.epochs,
+        log_every_n_steps=1,
+        logger=logger,
+        callbacks=[lr_monitor, checkpoint_callback],
+        check_val_every_n_epoch=5,
     )
-    trainer.fit(model, train_loader, train_loader)
-    # trainer.test(test_dataloaders=[test_loader])
+
+    log_hyperparameters(
+        config=cfg,
+        model=model,
+        datamodule=None,
+        trainer=trainer,
+        callbacks=None,
+        logger=logger,
+    )
+
+    if cfg.run.test_only:
+        model = PerceiverIOClassifier.load_from_checkpoint(
+            checkpoint_path=os.path.join(get_original_cwd(), cfg.run.checkpoint_path,)
+        )
+
+        model.test_mask = test_idx
+        trainer.test(model, test_dataloaders=[train_loader])
+        import sys
+
+        sys.exit(1)
+
+    if not cfg.run.resume:
+        trainer.fit(
+            model, train_loader, train_loader,
+        )
+
+        # save gnn
+    # torch.save(model.perceiver.gnn1, os.path.join(get_original_cwd(), "sage.pt"))
+    else:
+        trainer.fit(
+            model,
+            train_loader,
+            train_loader,
+            ckpt_path=os.path.join(get_original_cwd(), cfg.run.checkpoint_path),
+        )
+
+    trainer.test(test_dataloaders=[train_loader])
 
 
 if __name__ == "__main__":
