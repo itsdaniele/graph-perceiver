@@ -1,7 +1,7 @@
 run:
-  name: "arxiv-test"
+  name: "more_more_latents"
   seed: 42
-  log: true
+  log: false
   dataset: "ogbn-arxiv"
   resume: false
   checkpoint_path:
@@ -9,20 +9,21 @@ run:
 
 train:
   gpus: 1
-  epochs: 1000
+  epochs: 500
   num_workers: 32
 
 model:
   depth: 3
   logits_dim: 40
-  attn_dropout: 0.0
+  attn_dropout: 0.1
   ff_dropout: 0.3
   gnn_embed_dim: 256
-  num_latents: 32
-  latent_dim: 32
+  num_latents: 4
+  latent_dim: 256
   cross_heads: 4
   latent_heads: 4
-  cross_dim_head: 8
-  latent_dim_head: 8
-  lr: 0.0005
+  cross_dim_head: 4
+  latent_dim_head: 4
+  lr: 0.0001
+  weight_tie_layers: false
   

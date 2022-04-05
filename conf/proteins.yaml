@@ -1,28 +1,28 @@
 run:
-  name: "more-latents"
-  seed: 42
+  name: "full+gcn"
+  seed: 99
   log: true
   dataset: "ogbn-proteins"
   resume: false
-  checkpoint_path:
+  checkpoint_path: "outputs/2022-04-05/10-04-03/checkpoints/last.ckpt"
   test_only: false
 
 train:
   gpus: 1
-  epochs: 1000
+  epochs: 5000
   num_workers: 32
 
 model:
-  depth: 1
+  depth: 8
   logits_dim: 112
   attn_dropout: 0.0
-  ff_dropout: 0.0
+  ff_dropout: 0.1
   gnn_embed_dim: 256
   num_latents: 1024
-  latent_dim: 32
+  latent_dim: 128
   cross_heads: 4
   latent_heads: 4
   cross_dim_head: 8
   latent_dim_head: 8
-  lr: 0.0008
+  lr: 0.001
   

@@ -1,5 +1,5 @@
 import pytorch_lightning as pl
-from model.classifier_io import PerceiverIOClassifier
+from model.hugging import PerceiverIOClassifier
 
 
 from torch_geometric.loader import DataLoader
@@ -55,6 +55,9 @@ def main(cfg: DictConfig):
         exp_name = f"{cfg.run.dataset}+seed-{cfg.run.seed}+{cfg.run.name}"
         logger = WandbLogger(name=exp_name, project="graph-perceiver")
 
+    else:
+        logger = None
+
     if cfg.run.dataset == "ogbn-proteins":
         monitor = "val/rocauc"
     elif cfg.run.dataset == "ogbn-arxiv":
@@ -85,24 +88,32 @@ def main(cfg: DictConfig):
         latent_dim_head=cfg.model.latent_dim_head,
         ff_dropout=cfg.model.ff_dropout,
         lr=cfg.model.lr,
+        weight_tie_layers=cfg.model.weight_tie_layers,
     )
+
+    callbacks = [checkpoint_callback]
+
+    if logger is not None:
+        callbacks += lr_monitor
+
     trainer = pl.Trainer(
         gpus=cfg.train.gpus,
         max_epochs=cfg.train.epochs,
         log_every_n_steps=1,
         logger=logger,
-        callbacks=[lr_monitor, checkpoint_callback],
+        callbacks=callbacks,
         check_val_every_n_epoch=5,
     )
 
-    log_hyperparameters(
-        config=cfg,
-        model=model,
-        datamodule=None,
-        trainer=trainer,
-        callbacks=None,
-        logger=logger,
-    )
+    if logger is not None:
+        log_hyperparameters(
+            config=cfg,
+            model=model,
+            datamodule=None,
+            trainer=trainer,
+            callbacks=None,
+            logger=logger,
+        )
 
     if cfg.run.test_only:
         model = PerceiverIOClassifier.load_from_checkpoint(
@@ -135,3 +146,4 @@ def main(cfg: DictConfig):
 
 if __name__ == "__main__":
     main()
+

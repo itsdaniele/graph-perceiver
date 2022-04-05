@@ -17,6 +17,10 @@ from hydra.utils import get_original_cwd
 from omegaconf import DictConfig
 import os
 
+from util import attention_entropy
+
+import wandb
+
 
 class PerceiverIOClassifier(pl.LightningModule):
     def __init__(
@@ -93,23 +97,23 @@ class PerceiverIOClassifier(pl.LightningModule):
             self.log("train/loss", loss)
 
         elif self.dataset == "ogbn-arxiv":
-            y_hat = self(batch)[self.train_mask]
+            y_hat = self(batch)[0][self.train_mask]
             y = batch.y[self.train_mask].squeeze(-1)
             train_loss = F.cross_entropy(y_hat, y)
 
             acc = self.evaluator.eval(
                 {
-                    "y_true": batch.y[self.val_mask],
+                    "y_true": batch.y[self.train_mask],
                     "y_pred": self(batch)
                     .squeeze(0)
-                    .argmax(dim=-1, keepdim=True)[self.val_mask],
+                    .argmax(dim=-1, keepdim=True)[self.train_mask],
                 }
             )["acc"]
             self.log("train/acc", acc, batch_size=1)
             self.log("train/loss", train_loss, batch_size=1)
         elif self.dataset == "ogbn-proteins":
 
-            y_hat = self(batch)
+            y_hat = self(batch)[0]
             y_hat_train = y_hat[self.train_mask]
             y = batch.y[self.train_mask].float()
             train_loss = F.binary_cross_entropy_with_logits(y_hat_train, y)
@@ -127,12 +131,13 @@ class PerceiverIOClassifier(pl.LightningModule):
             loss = F.cross_entropy(y_hat, y)
 
             acc = torchmetrics.functional.accuracy(torch.argmax(y_hat, dim=-2), y)
-            self.log("val/acc", acc)
-            self.log("val/loss", loss)
+            self.log("val/acc", acc, batch_size=1)
+            self.log("val/loss", loss, batch_size=1)
 
         elif self.dataset == "ogbn-arxiv":
 
-            y_hat = self(batch)[self.val_mask]
+            out, attns = self(batch)
+            y_hat = out[self.val_mask]
 
             y = batch.y[self.val_mask].squeeze(-1)
             loss = F.cross_entropy(y_hat, y)
@@ -149,7 +154,7 @@ class PerceiverIOClassifier(pl.LightningModule):
             self.log("val/loss", loss, batch_size=1)
 
         elif self.dataset == "ogbn-proteins":
-            y_hat = self(batch)
+            y_hat, attns = self(batch)
             y_hat_val = y_hat[self.val_mask]
 
             y = batch.y[self.val_mask].float()
@@ -160,6 +165,16 @@ class PerceiverIOClassifier(pl.LightningModule):
             )["rocauc"]
             self.log("val/rocauc", rocauc, batch_size=1)
             self.log("val/loss", val_loss, batch_size=1)
+
+            if attns is not None:
+                entropy = attention_entropy(attns[0])
+                wandb.log(
+                    {
+                        "attention_entropy": wandb.plots.HeatMap(
+                            list(range(256)), list(range(4)), entropy, show_text=False
+                        )
+                    }
+                )
 
     def validation_step(self, batch, batch_idx):
         return self.evaluate(batch, "val")
@@ -173,6 +188,18 @@ class PerceiverIOClassifier(pl.LightningModule):
                 {"y_true": batch.y[self.test_mask], "y_pred": y_hat_val}
             )["rocauc"]
             self.log("test/rocauc", rocauc, batch_size=1)
+
+        elif self.dataset == "ogbn-arxiv":
+            y_hat = self(batch)[self.test_mask]
+            acc = self.evaluator.eval(
+                {
+                    "y_true": batch.y[self.test_mask],
+                    "y_pred": self(batch)
+                    .squeeze(0)
+                    .argmax(dim=-1, keepdim=True)[self.test_mask],
+                }
+            )["acc"]
+            self.log("test/acc", acc, batch_size=1)
 
     def configure_optimizers(self):
 

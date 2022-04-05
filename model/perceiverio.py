@@ -53,16 +53,17 @@ def cache_fn(f):
 
 
 class PreNorm(nn.Module):
-    def __init__(self, dim, fn, context_dim=None):
+    def __init__(self, dim, fn, context_dim=None, do_norm_context=True):
         super().__init__()
         self.fn = fn
+        self.do_norm_context = do_norm_context
         self.norm = nn.LayerNorm(dim)
         self.norm_context = nn.LayerNorm(context_dim) if exists(context_dim) else None
 
     def forward(self, x, **kwargs):
         x = self.norm(x)
 
-        if exists(self.norm_context):
+        if exists(self.norm_context) and self.do_norm_context is True:
             context = kwargs["context"]
             normed_context = self.norm_context(context)
             kwargs.update(context=normed_context)
@@ -79,7 +80,7 @@ class GEGLU(nn.Module):
 
 
 class FeedForward(nn.Module):
-    def __init__(self, dim, mult=2, dropout=0.0):
+    def __init__(self, dim, mult=4, dropout=0.0):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(dim, dim * mult * 2),
@@ -134,7 +135,7 @@ class Attention(nn.Module):
 
         out = einsum("b i j, b j d -> b i d", attn, v)
         out = rearrange(out, "(b h) n d -> b n (h d)", h=h)
-        return self.to_out(out)
+        return self.to_out(out), rearrange(attn, "(b h) n d -> b h n d", h=h)
 
 
 def init_params(module, n_layers):
@@ -172,23 +173,9 @@ class PerceiverIO(nn.Module):
         super().__init__()
 
         if gnn_encoder is None:
-            # self.gnn1 = GCNCORA(gnn_embed_dim)
-            # self.gnn2 = GCNCORA(gnn_embed_dim)
 
-            # self.gnn1 = GCNPROTEINS(gnn_embed_dim)
-            # self.gnn2 = GCNPROTEINS(gnn_embed_dim)
-
-            self.gnn1 = SAGEPROTEINSEMBED(gnn_embed_dim)
-            self.gnn2 = SAGEPROTEINSEMBED(gnn_embed_dim)
-
-            self.gnn1 = GCNARXIV(gnn_embed_dim)
-            self.gnn2 = GCNARXIV(gnn_embed_dim)
-
-            # self.gnn1 = NNCONVPROTEINS(gnn_embed_dim)
-            # self.gnn2 = NNCONVPROTEINS(gnn_embed_dim)
-
-            # self.gnn1 = GATPROTEINS(gnn_embed_dim)
-            # self.gnn2 = GATPROTEINS(gnn_embed_dim)
+            self.gnn = GCNPROTEINS(gnn_embed_dim)
+            # self.gnn = SAGEPROTEINS(gnn_embed_dim)
 
         else:
             self.gnn1 = gnn_encoder
@@ -207,6 +194,7 @@ class PerceiverIO(nn.Module):
                         dropout=attn_dropout,
                     ),
                     context_dim=queries_dim,
+                    do_norm_context=False,
                 ),
                 PreNorm(latent_dim, FeedForward(latent_dim, dropout=ff_dropout)),
             ]
@@ -254,10 +242,14 @@ class PerceiverIO(nn.Module):
         )
 
         self.to_logits = (
-            nn.Linear(queries_dim, logits_dim) if exists(logits_dim) else nn.Identity()
+            nn.Linear(queries_dim * 2, logits_dim)
+            if exists(logits_dim)
+            else nn.Identity()
         )
 
-        # self.apply(lambda module: init_params(module, n_layers=depth))
+        self.apply(lambda module: init_params(module, n_layers=depth))
+
+        # self.input_linear = nn.Linear(8, gnn_embed_dim)
 
     def forward(self, batch, mask=None, queries=None):
 
@@ -267,11 +259,11 @@ class PerceiverIO(nn.Module):
         # )
         # return data.squeeze(0)
 
-        data = self.gnn1(batch, training=self.training).unsqueeze(0)
+        attns = []
 
+        data = self.gnn(batch).unsqueeze(0)
         if queries is None:
-            queries = (self.gnn2(batch, training=self.training)).unsqueeze(0)
-            # queries = data
+            queries = data
 
         b = data.shape[0]
         x = repeat(self.latents, "n d -> b n d", b=b)
@@ -279,13 +271,15 @@ class PerceiverIO(nn.Module):
         cross_attn, cross_ff = self.cross_attend_block
 
         # cross attention only happens once for Perceiver IO
-        x = cross_attn(x, context=data) + x
+        out, attn = cross_attn(x, context=data)
+        attns.append(attn)
+        x = out + x
         x = cross_ff(x) + x
 
         # layers
 
         for self_attn, self_ff in self.layers:
-            x = self_attn(x) + x
+            x = self_attn(x)[0] + x
             x = self_ff(x) + x
 
         # make sure queries contains batch dimension
@@ -294,13 +288,17 @@ class PerceiverIO(nn.Module):
             queries = repeat(queries, "n d -> b n d", b=b)
 
         # cross attend from decoder queries to latents
-        latents = self.decoder_cross_attn(queries, context=x)
+        latents, attn = self.decoder_cross_attn(queries, context=x)
+        attns.append(attn)
 
         # optional decoder feedforward
         if exists(self.decoder_ff):
             latents = latents + self.decoder_ff(latents)
 
-        # final linear out
-        logits = self.to_logits(latents)
-        return logits.squeeze(0)
+        # batch.x = latents.squeeze(0)
+        # latents = self.gnn_final(batch).unsqueeze(0)
+        out = torch.cat([latents, queries], dim=-1)
+
+        logits = self.to_logits(out)
+        return logits.squeeze(0), attns
 

@@ -168,22 +168,28 @@ class GNN_node_Virtualnode(torch.nn.Module):
 
 
 class SAGEPROTEINS(torch.nn.Module):
-    def __init__(self, emb_dim):
+    def __init__(self, emb_dim, post=False):
         super().__init__()
-        self.conv1 = SAGEConv(8, emb_dim)
+
+        # self.in_proj = torch.nn.Linear(8, emb_dim)
+
+        if post:
+            self.conv1 = SAGEConv(emb_dim, emb_dim)
+        else:
+            self.conv1 = SAGEConv(8, emb_dim)
         self.conv2 = SAGEConv(emb_dim, emb_dim)
         # self.conv3 = SAGEConv(emb_dim, emb_dim)
-        self.conv3 = SAGEConv(emb_dim, 112)
+        self.conv3 = SAGEConv(emb_dim, emb_dim)
 
-    def forward(self, data, training=False):
+    def forward(self, data):
         x, adj_t = data.x, data.adj_t
 
         x = self.conv1(x, adj_t)
         x = F.relu(x)
-        # x = F.dropout(x, p=0.5, training=training)
+        x = F.dropout(x, p=0.1)
         x = self.conv2(x, adj_t)
         x = F.relu(x)
-        # x = F.dropout(x, p=0.5, training=training)
+        x = F.dropout(x, p=0.1)
         x = self.conv3(x, adj_t)
 
         return x
@@ -249,48 +255,48 @@ class GCNPROTEINS(torch.nn.Module):
         self.conv1 = GCNConvGeometric(8, emb_dim, normalize=False)
         self.conv2 = GCNConvGeometric(emb_dim, emb_dim, normalize=False)
         self.conv3 = GCNConvGeometric(emb_dim, emb_dim, normalize=False)
-        # self.conv3 = GCNConvGeometric(emb_dim, 112, normalize=False)
 
-    def reset_parameters(self):
-        for conv in self.convs:
-            conv.reset_parameters()
-
-    def forward(self, data, training=False):
+    def forward(self, data):
         x, adj_t = data.x, data.adj_t
 
         x = self.conv1(x, adj_t)
         x = F.relu(x)
-        x = F.dropout(x, p=0.0, training=training)
+        x = F.dropout(x, p=0.1)
         x = self.conv2(x, adj_t)
         x = F.relu(x)
-        x = F.dropout(x, p=0.0, training=training)
+        x = F.dropout(x, p=0.1)
         x = self.conv3(x, adj_t)
-
         return x
 
 
 class GCNARXIV(torch.nn.Module):
     def __init__(self, emb_dim):
         super().__init__()
-        self.conv1 = GCNConvGeometric(128, emb_dim,)
-        self.conv2 = GCNConvGeometric(emb_dim, emb_dim,)
-        self.conv3 = GCNConvGeometric(emb_dim, emb_dim,)
+
+        # self.in_proj = torch.nn.Linear(128, emb_dim)
+        self.conv1 = GCNConvGeometric(128, emb_dim, cached=True)
+        self.conv2 = GCNConvGeometric(emb_dim, emb_dim, cached=True)
+        self.conv3 = GCNConvGeometric(emb_dim, emb_dim, cached=True)
         # self.conv3 = GCNConvGeometric(emb_dim, 112, normalize=False)
+        self.bns = torch.nn.ModuleList()
 
-    def reset_parameters(self):
-        for conv in self.convs:
-            conv.reset_parameters()
+        for _ in range(2):
+            self.bns.append(torch.nn.BatchNorm1d(emb_dim))
 
-    def forward(self, data, training=False):
+    def forward(self, data):
         x, adj_t = data.x, data.adj_t
 
+        # first = self.in_proj(x)
+
         x = self.conv1(x, adj_t)
+        x = self.bns[0](x)
         x = F.relu(x)
-        x = F.dropout(x, p=0.5, training=training)
+        # x = F.dropout(x, p=0.5)
         x = self.conv2(x, adj_t)
+        x = self.bns[1](x)
         x = F.relu(x)
-        x = F.dropout(x, p=0.5, training=training)
-        x = self.conv3(x, adj_t)
+        # x = F.dropout(x, p=0.5)
+        x = self.conv3(x, adj_t)  # + x
 
         return x
 

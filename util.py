@@ -8,6 +8,14 @@ from pytorch_lightning.utilities import rank_zero_only
 import numpy as np
 import torch
 
+from scipy.stats import entropy
+
+
+def attention_entropy(attention):
+
+    attention = attention.cpu().numpy()
+    return entropy(attention, axis=-1).squeeze(0)
+
 
 @rank_zero_only
 def log_hyperparameters(

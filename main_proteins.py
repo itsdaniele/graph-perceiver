@@ -18,11 +18,8 @@ from ogb.nodeproppred import PygNodePropPredDataset
 from util import log_hyperparameters
 
 
-import torch
-
-
 @hydra.main(config_path="conf", config_name="proteins")
-def main(cfg: DictConfig): 
+def main(cfg: DictConfig):
 
     pl.seed_everything(cfg.run.seed)
 
@@ -41,27 +38,25 @@ def main(cfg: DictConfig):
     )
 
     data = dataset[0]
-    data.x = data.adj_t.mean(dim=1)
+    data.x = data.adj_t.sum(dim=1)
     data.adj_t.set_value_(None)
 
     # Pre-compute GCN normalization.
-    # adj_t = data.adj_t.set_diag()
-    # deg = adj_t.sum(dim=1).to(torch.float)
-    # deg_inv_sqrt = deg.pow(-0.5)
-    # deg_inv_sqrt[deg_inv_sqrt == float("inf")] = 0
-    # adj_t = deg_inv_sqrt.view(-1, 1) * adj_t * deg_inv_sqrt.view(1, -1)
-    # data.adj_t = adj_t
+    adj_t = data.adj_t.set_diag()
+    deg = adj_t.sum(dim=1).to(torch.float)
+    deg_inv_sqrt = deg.pow(-0.5)
+    deg_inv_sqrt[deg_inv_sqrt == float("inf")] = 0
+    adj_t = deg_inv_sqrt.view(-1, 1) * adj_t * deg_inv_sqrt.view(1, -1)
+    data.adj_t = adj_t
 
     dataset = [data]
-
     train_loader = DataLoader(dataset, batch_size=1, num_workers=32)
-
     lr_monitor = LearningRateMonitor(logging_interval="step")
 
     if cfg.run.log:
 
         exp_name = f"{cfg.run.dataset}+seed-{cfg.run.seed}+{cfg.run.name}"
-        logger = WandbLogger(name=exp_name, project="graph-perceiver")
+        logger = WandbLogger(name=exp_name, project="graph-perceiver-new")
 
     if cfg.run.dataset == "ogbn-proteins":
         monitor = "val/rocauc"
