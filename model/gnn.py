@@ -261,11 +261,11 @@ class GCNPROTEINS(torch.nn.Module):
 
         x = self.conv1(x, adj_t)
         x = F.relu(x)
-        x = F.dropout(x, p=0.1)
-        x = self.conv2(x, adj_t)
+        x = F.dropout(x, p=0.0)
+        x = self.conv2(x, adj_t) + x
         x = F.relu(x)
-        x = F.dropout(x, p=0.1)
-        x = self.conv3(x, adj_t)
+        x = F.dropout(x, p=0.0)
+        x = self.conv3(x, adj_t) + x
         return x
 
 
@@ -512,3 +512,23 @@ class GNN_node_Virtualnode_no_batchnorm(torch.nn.Module):
             node_representation = torch.cat([h_list[0], h_list[-1]], dim=-1)
 
         return node_representation
+
+
+class GCNCIRCLES(torch.nn.Module):
+    def __init__(self, emb_dim):
+        super().__init__()
+        self.conv1 = GCNConvGeometric(32, emb_dim)
+        self.conv2 = GCNConvGeometric(emb_dim, emb_dim)
+        self.conv3 = GCNConvGeometric(emb_dim, emb_dim)
+
+    def forward(self, data):
+        x, edge_index = data.x, data.edge_index
+
+        x = self.conv1(x, edge_index)
+        x = F.relu(x)
+
+        x = self.conv2(x, edge_index)
+        x = F.relu(x)
+        x = self.conv3(x, edge_index)
+
+        return x

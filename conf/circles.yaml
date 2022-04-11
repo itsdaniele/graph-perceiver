@@ -1,28 +1,28 @@
 run:
-  name: "full+gcn+different"
+  name: "circles"
   seed: 99
   log: true
-  dataset: "ogbn-proteins"
+  dataset: "circles"
   resume: false
-  checkpoint_path: "outputs/2022-04-05/10-04-03/checkpoints/last.ckpt"
+  checkpoint_path: 
   test_only: false
 
 train:
   gpus: 1
-  epochs: 2000
+  epochs: 200
   num_workers: 32
 
 model:
-  depth: 3
-  logits_dim: 112
+  depth: 1
+  logits_dim: 4
   attn_dropout: 0.0
   ff_dropout: 0.0
   gnn_embed_dim: 256
-  num_latents: 1024
+  num_latents: 3
   latent_dim: 32
   cross_heads: 4
   latent_heads: 4
   cross_dim_head: 8
   latent_dim_head: 8
-  lr: 0.0001
+  lr: 0.001
   

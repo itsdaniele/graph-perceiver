@@ -16,40 +16,47 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from ogb.nodeproppred import PygNodePropPredDataset
 
 from util import log_hyperparameters
+import torch
+
+from synthetic.circles import get_circles_dataset
 
 
-@hydra.main(config_path="conf", config_name="proteins")
+@hydra.main(config_path="conf", config_name="circles")
 def main(cfg: DictConfig):
 
     pl.seed_everything(cfg.run.seed)
 
-    dataset = PygNodePropPredDataset(
-        name=cfg.run.dataset,
-        root=os.path.join(get_original_cwd(), "./data",),
-        transform=T.ToSparseTensor(attr="edge_attr"),
-    )
+    if cfg.run.dataset == "ogbn-proteins":
+        dataset = PygNodePropPredDataset(
+            name=cfg.run.dataset,
+            root=os.path.join(get_original_cwd(), "./data",),
+            transform=T.ToSparseTensor(attr="edge_attr"),
+        )
 
-    split_idx = dataset.get_idx_split()
+        split_idx = dataset.get_idx_split()
 
-    train_idx, valid_idx, test_idx = (
-        split_idx["train"],
-        split_idx["valid"],
-        split_idx["test"],
-    )
+        train_idx, valid_idx, test_idx = (
+            split_idx["train"],
+            split_idx["valid"],
+            split_idx["test"],
+        )
 
-    data = dataset[0]
-    data.x = data.adj_t.sum(dim=1)
-    data.adj_t.set_value_(None)
+        data = dataset[0]
+        data.x = data.adj_t.sum(dim=1)
+        data.adj_t.set_value_(None)
 
-    # Pre-compute GCN normalization.
-    adj_t = data.adj_t.set_diag()
-    deg = adj_t.sum(dim=1).to(torch.float)
-    deg_inv_sqrt = deg.pow(-0.5)
-    deg_inv_sqrt[deg_inv_sqrt == float("inf")] = 0
-    adj_t = deg_inv_sqrt.view(-1, 1) * adj_t * deg_inv_sqrt.view(1, -1)
-    data.adj_t = adj_t
+        # Pre-compute GCN normalization.
+        adj_t = data.adj_t.set_diag()
+        deg = adj_t.sum(dim=1).to(torch.float)
+        deg_inv_sqrt = deg.pow(-0.5)
+        deg_inv_sqrt[deg_inv_sqrt == float("inf")] = 0
+        adj_t = deg_inv_sqrt.view(-1, 1) * adj_t * deg_inv_sqrt.view(1, -1)
+        data.adj_t = adj_t
 
-    dataset = [data]
+        dataset = [data]
+    elif cfg.run.dataset == "circles":
+        dataset, train_idx, valid_idx, test_idx = get_circles_dataset(n_classes=3, N=10)
+
     train_loader = DataLoader(dataset, batch_size=1, num_workers=32)
     lr_monitor = LearningRateMonitor(logging_interval="step")
 
@@ -60,7 +67,7 @@ def main(cfg: DictConfig):
 
     if cfg.run.dataset == "ogbn-proteins":
         monitor = "val/rocauc"
-    elif cfg.run.dataset == "ogbg-arxiv":
+    elif cfg.run.dataset in ["ogbg-arxiv", "circles"]:
         monitor = "val/acc"
     checkpoint_callback = ModelCheckpoint(
         monitor=monitor,

@@ -17,7 +17,7 @@ from hydra.utils import get_original_cwd
 from omegaconf import DictConfig
 import os
 
-from util import attention_entropy
+from util import attention_entropy, get_linear_schedule_with_warmup
 
 import wandb
 
@@ -57,6 +57,8 @@ class PerceiverIOClassifier(pl.LightningModule):
 
         queries_dim = gnn_embed_dim
         self.dataset = dataset
+
+        dataset = "ogbn-arxiv" if dataset == "circles" else dataset
         self.evaluator = Evaluator(name=dataset)
 
         # gnn = SAGEPROTEINSEMBED(gnn_embed_dim)
@@ -96,17 +98,17 @@ class PerceiverIOClassifier(pl.LightningModule):
             self.log("train/acc", acc)
             self.log("train/loss", loss)
 
-        elif self.dataset == "ogbn-arxiv":
+        elif self.dataset in ["ogbn-arxiv", "circles"]:
             y_hat = self(batch)[0][self.train_mask]
             y = batch.y[self.train_mask].squeeze(-1)
             train_loss = F.cross_entropy(y_hat, y)
 
             acc = self.evaluator.eval(
                 {
-                    "y_true": batch.y[self.train_mask],
-                    "y_pred": self(batch)
-                    .squeeze(0)
-                    .argmax(dim=-1, keepdim=True)[self.train_mask],
+                    "y_true": batch.y[self.train_mask].unsqueeze(-1),
+                    "y_pred": y_hat.squeeze(0).argmax(dim=-1, keepdim=True)[
+                        self.train_mask
+                    ],
                 }
             )["acc"]
             self.log("train/acc", acc, batch_size=1)
@@ -134,7 +136,7 @@ class PerceiverIOClassifier(pl.LightningModule):
             self.log("val/acc", acc, batch_size=1)
             self.log("val/loss", loss, batch_size=1)
 
-        elif self.dataset == "ogbn-arxiv":
+        elif self.dataset in ["ogbn-arxiv", "circles"]:
 
             out, attns = self(batch)
             y_hat = out[self.val_mask]
@@ -144,10 +146,10 @@ class PerceiverIOClassifier(pl.LightningModule):
 
             acc = self.evaluator.eval(
                 {
-                    "y_true": batch.y[self.val_mask],
-                    "y_pred": self(batch)
-                    .squeeze(0)
-                    .argmax(dim=-1, keepdim=True)[self.val_mask],
+                    "y_true": batch.y[self.val_mask].unsqueeze(-1),
+                    "y_pred": out.squeeze(0).argmax(dim=-1, keepdim=True)[
+                        self.val_mask
+                    ],
                 }
             )["acc"]
             self.log("val/acc", acc, batch_size=1)
@@ -166,15 +168,15 @@ class PerceiverIOClassifier(pl.LightningModule):
             self.log("val/rocauc", rocauc, batch_size=1)
             self.log("val/loss", val_loss, batch_size=1)
 
-            if attns is not None:
-                entropy = attention_entropy(attns[0])
-                wandb.log(
-                    {
-                        "attention_entropy": wandb.plots.HeatMap(
-                            list(range(256)), list(range(4)), entropy, show_text=False
-                        )
-                    }
-                )
+            # if attns is not None:
+            #     entropy = attention_entropy(attns[0])
+            #     wandb.log(
+            #         {
+            #             "attention_entropy": wandb.plots.HeatMap(
+            #                 list(range(256)), list(range(4)), entropy, show_text=False
+            #             )
+            #         }
+            #     )
 
     def validation_step(self, batch, batch_idx):
         return self.evaluate(batch, "val")
@@ -214,6 +216,9 @@ class PerceiverIOClassifier(pl.LightningModule):
         # )
 
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+        # scheduler = get_linear_schedule_with_warmup(
+        #     optimizer, num_warmup_steps=0.05 * 2000, num_training_steps=2000
+        # )
         # scheduler_poly_lr_decay = PolynomialLRDecay(
         #     optimizer, max_decay_steps=100, end_learning_rate=0.0001, power=1.0
         # )

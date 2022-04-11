@@ -22,6 +22,7 @@ from .gnn import (
     NNCONVPROTEINS,
     SAGEPROTEINSEMBED,
     GCNARXIV,
+    GCNCIRCLES,
 )
 
 
@@ -175,6 +176,7 @@ class PerceiverIO(nn.Module):
         if gnn_encoder is None:
 
             self.gnn = GCNPROTEINS(gnn_embed_dim)
+            self.gnn = GCNCIRCLES(gnn_embed_dim)
             # self.gnn = SAGEPROTEINS(gnn_embed_dim)
 
         else:
@@ -248,6 +250,7 @@ class PerceiverIO(nn.Module):
         )
 
         self.apply(lambda module: init_params(module, n_layers=depth))
+        self.scale_out = nn.Parameter(torch.scalar_tensor(0.1))
 
         # self.input_linear = nn.Linear(8, gnn_embed_dim)
 
@@ -262,6 +265,7 @@ class PerceiverIO(nn.Module):
         attns = []
 
         data = self.gnn(batch).unsqueeze(0)
+
         if queries is None:
             queries = data
 
@@ -297,7 +301,7 @@ class PerceiverIO(nn.Module):
 
         # batch.x = latents.squeeze(0)
         # latents = self.gnn_final(batch).unsqueeze(0)
-        out = torch.cat([latents, queries], dim=-1)
+        out = torch.cat([self.scale_out * latents, queries], dim=-1)
 
         logits = self.to_logits(out)
         return logits.squeeze(0), attns
