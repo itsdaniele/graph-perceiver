@@ -17,7 +17,7 @@ from ogb.nodeproppred import PygNodePropPredDataset
 
 from util import log_hyperparameters
 import torch
-
+import torch.nn.functional as F
 from synthetic.circles import get_circles_dataset
 
 
@@ -55,7 +55,8 @@ def main(cfg: DictConfig):
 
         dataset = [data]
     elif cfg.run.dataset == "circles":
-        dataset, train_idx, valid_idx, test_idx = get_circles_dataset(n_classes=3, N=10)
+        dataset, train_idx, valid_idx, test_idx = get_circles_dataset()
+       
 
     train_loader = DataLoader(dataset, batch_size=1, num_workers=32)
     lr_monitor = LearningRateMonitor(logging_interval="step")

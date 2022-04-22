@@ -244,13 +244,13 @@ class PerceiverIO(nn.Module):
         )
 
         self.to_logits = (
-            nn.Linear(queries_dim * 2, logits_dim)
+            nn.Linear(queries_dim * 1, logits_dim)
             if exists(logits_dim)
             else nn.Identity()
         )
 
         self.apply(lambda module: init_params(module, n_layers=depth))
-        self.scale_out = nn.Parameter(torch.scalar_tensor(0.1))
+        # self.scale_out = nn.Parameter(torch.scalar_tensor(0.1))
 
         # self.input_linear = nn.Linear(8, gnn_embed_dim)
 
@@ -265,6 +265,7 @@ class PerceiverIO(nn.Module):
         attns = []
 
         data = self.gnn(batch).unsqueeze(0)
+        return data.squeeze(0), None
 
         if queries is None:
             queries = data
@@ -301,7 +302,9 @@ class PerceiverIO(nn.Module):
 
         # batch.x = latents.squeeze(0)
         # latents = self.gnn_final(batch).unsqueeze(0)
-        out = torch.cat([self.scale_out * latents, queries], dim=-1)
+        # out = torch.cat([latents, queries], dim=-1)
+
+        out = latents
 
         logits = self.to_logits(out)
         return logits.squeeze(0), attns

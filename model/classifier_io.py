@@ -105,7 +105,7 @@ class PerceiverIOClassifier(pl.LightningModule):
 
             acc = self.evaluator.eval(
                 {
-                    "y_true": batch.y[self.train_mask].unsqueeze(-1),
+                    "y_true": batch.y[self.train_mask],
                     "y_pred": y_hat.squeeze(0).argmax(dim=-1, keepdim=True)[
                         self.train_mask
                     ],
@@ -146,7 +146,7 @@ class PerceiverIOClassifier(pl.LightningModule):
 
             acc = self.evaluator.eval(
                 {
-                    "y_true": batch.y[self.val_mask].unsqueeze(-1),
+                    "y_true": batch.y[self.val_mask],
                     "y_pred": out.squeeze(0).argmax(dim=-1, keepdim=True)[
                         self.val_mask
                     ],
