@@ -1,26 +1,22 @@
-import pytorch_lightning as pl
-from model.hugging import PerceiverIOClassifier
+from model.classifier_io import PerceiverIOClassifier
 
 
 from torch_geometric.loader import DataLoader
 import torch_geometric.transforms as T
 
-from pytorch_lightning.loggers import WandbLogger
+
 import hydra
 from hydra.utils import get_original_cwd
 from omegaconf import DictConfig
 import os
 
+import pytorch_lightning as pl
+from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 
 from ogb.nodeproppred import PygNodePropPredDataset
 
 from util import log_hyperparameters
-
-
-import torch
-
-wandb_logger = WandbLogger(project="graph-perceiver")
 
 
 @hydra.main(config_path="conf", config_name="arxiv")
@@ -50,13 +46,11 @@ def main(cfg: DictConfig):
     train_loader = DataLoader(dataset, batch_size=1, num_workers=32)
     lr_monitor = LearningRateMonitor(logging_interval="step")
 
+    logger = None
     if cfg.run.log:
 
         exp_name = f"{cfg.run.dataset}+seed-{cfg.run.seed}+{cfg.run.name}"
-        logger = WandbLogger(name=exp_name, project="graph-perceiver")
-
-    else:
-        logger = None
+        logger = WandbLogger(name=exp_name, project="graph-perceiver-new")
 
     if cfg.run.dataset == "ogbn-proteins":
         monitor = "val/rocauc"
@@ -94,7 +88,7 @@ def main(cfg: DictConfig):
     callbacks = [checkpoint_callback]
 
     if logger is not None:
-        callbacks += lr_monitor
+        callbacks += [lr_monitor]
 
     trainer = pl.Trainer(
         gpus=cfg.train.gpus,

@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 import torchmetrics
 
-from .perceiverio import PerceiverIO
+from .perceiverio_cluster import PerceiverIO
 from ogb.nodeproppred import Evaluator
 
 from torch_poly_lr_decay import PolynomialLRDecay
@@ -42,7 +42,7 @@ class PerceiverIOClassifier(pl.LightningModule):
         lr=0.0001,
         dataset="cora",
         train_mask=None,
-        val_mask=None,
+        valid_mask=None,
         test_mask=None,
     ):
         super().__init__()
@@ -50,7 +50,7 @@ class PerceiverIOClassifier(pl.LightningModule):
         self.save_hyperparameters()
 
         self.train_mask = train_mask
-        self.val_mask = val_mask
+        self.valid_mask = valid_mask
         self.test_mask = test_mask
 
         self.lr = lr
@@ -103,21 +103,21 @@ class PerceiverIOClassifier(pl.LightningModule):
             y = batch.y[self.train_mask].squeeze(-1)
             train_loss = F.cross_entropy(y_hat, y)
 
-            # acc = self.evaluator.eval(
-            #     {
-            #         "y_true": batch.y[self.train_mask],
-            #         "y_pred": y_hat.squeeze(0).argmax(dim=-1, keepdim=True)[
-            #             self.train_mask
-            #         ].detach(),
-            #     }
-            # )["acc"]
-            # self.log("train/acc", acc, batch_size=1)
+            acc = self.evaluator.eval(
+                {
+                    "y_true": batch.y[self.train_mask],
+                    "y_pred": y_hat.squeeze(0).argmax(dim=-1, keepdim=True)[
+                        self.train_mask
+                    ],
+                }
+            )["acc"]
+            self.log("train/acc", acc, batch_size=1)
             self.log("train/loss", train_loss, batch_size=1)
         elif self.dataset == "ogbn-proteins":
 
-            y_hat = self(batch)[0]
+            y_hat = self(batch["train1"], batch_full=batch["train_full"])[0]
             y_hat_train = y_hat[self.train_mask]
-            y = batch.y[self.train_mask].float()
+            y = batch["train_full"].y[self.train_mask].float()
             train_loss = F.binary_cross_entropy_with_logits(y_hat_train, y)
 
             self.log("train/loss", train_loss, batch_size=1)
@@ -138,7 +138,7 @@ class PerceiverIOClassifier(pl.LightningModule):
 
         elif self.dataset in ["ogbn-arxiv", "circles"]:
 
-            out, _ = self(batch)
+            out, attns = self(batch)
             y_hat = out[self.val_mask]
 
             y = batch.y[self.val_mask].squeeze(-1)
@@ -156,18 +156,19 @@ class PerceiverIOClassifier(pl.LightningModule):
             self.log("val/loss", loss, batch_size=1)
 
         elif self.dataset == "ogbn-proteins":
-            y_hat, attns = self(batch)
-            y_hat_val = y_hat[self.val_mask]
+
+            y_hat, attns = self(batch[0], batch_full=batch[1])
+            y_hat_val = y_hat[self.valid_mask]
             y_hat_test = y_hat[self.test_mask]
 
-            y = batch.y[self.val_mask].float()
+            y = batch[1].y[self.valid_mask].float()
             val_loss = F.binary_cross_entropy_with_logits(y_hat_val, y)
 
             rocauc = self.evaluator.eval(
-                {"y_true": batch.y[self.val_mask], "y_pred": y_hat_val}
+                {"y_true": batch[1].y[self.valid_mask], "y_pred": y_hat_val}
             )["rocauc"]
             rocauc_test = self.evaluator.eval(
-                {"y_true": batch.y[self.test_mask], "y_pred": y_hat_test}
+                {"y_true": batch[1].y[self.test_mask], "y_pred": y_hat_test}
             )["rocauc"]
             self.log("val/rocauc", rocauc, batch_size=1)
             self.log("test/rocauc", rocauc_test, batch_size=1)
@@ -189,10 +190,10 @@ class PerceiverIOClassifier(pl.LightningModule):
     def test_step(self, batch, batch_idx):
         if self.dataset == "ogbn-proteins":
             y_hat, attns = self(batch)
-            y_hat_val = y_hat[self.test_mask]
+            y_hat_val = y_hat[batch.test_mask]
 
             rocauc = self.evaluator.eval(
-                {"y_true": batch.y[self.test_mask], "y_pred": y_hat_val}
+                {"y_true": batch.y[batch.test_mask], "y_pred": y_hat_val}
             )["rocauc"]
             self.log("test/rocauc", rocauc, batch_size=1)
 

@@ -201,17 +201,14 @@ class SAGEPROTEINSEMBED(torch.nn.Module):
         self.conv1 = SAGEConv(8, emb_dim)
         self.conv2 = SAGEConv(emb_dim, emb_dim)
         self.conv3 = SAGEConv(emb_dim, emb_dim)
-        # self.conv3 = SAGEConv(emb_dim, 112)
 
-    def forward(self, data, training=False):
+    def forward(self, data):
         x, adj_t = data.x, data.adj_t
 
         x = self.conv1(x, adj_t)
         x = F.relu(x)
-        # x = F.dropout(x, p=0.5, training=training)
         x = self.conv2(x, adj_t)
         x = F.relu(x)
-        # x = F.dropout(x, p=0.5, training=training)
         x = self.conv3(x, adj_t)
 
         return x
@@ -269,15 +266,33 @@ class GCNPROTEINS(torch.nn.Module):
         return x
 
 
+class GCNPROTEINSFULL(torch.nn.Module):
+    def __init__(self, emb_dim):
+        super().__init__()
+        self.conv1 = GCNConvGeometric(emb_dim, emb_dim)
+        self.conv2 = GCNConvGeometric(emb_dim, emb_dim)
+        self.conv3 = GCNConvGeometric(emb_dim, emb_dim)
+
+    def forward(self, data):
+        x, edge_index = data.x, data.edge_index
+
+        x = self.conv1(x, edge_index)
+        x = F.relu(x)
+        x = F.dropout(x, p=0.0)
+        x = self.conv2(x, edge_index) + x
+        x = F.relu(x)
+        x = F.dropout(x, p=0.0)
+        x = self.conv3(x, edge_index) + x
+        return x
+
+
 class GCNARXIV(torch.nn.Module):
     def __init__(self, emb_dim):
         super().__init__()
 
-        # self.in_proj = torch.nn.Linear(128, emb_dim)
         self.conv1 = GCNConvGeometric(128, emb_dim, cached=True)
         self.conv2 = GCNConvGeometric(emb_dim, emb_dim, cached=True)
         self.conv3 = GCNConvGeometric(emb_dim, emb_dim, cached=True)
-        # self.conv3 = GCNConvGeometric(emb_dim, 112, normalize=False)
         self.bns = torch.nn.ModuleList()
 
         for _ in range(2):
@@ -285,20 +300,16 @@ class GCNARXIV(torch.nn.Module):
 
     def forward(self, data):
         x, adj_t = data.x, data.adj_t
-
-        # first = self.in_proj(x)
-
         x = self.conv1(x, adj_t)
         x = self.bns[0](x)
         x = F.relu(x)
-        # x = F.dropout(x, p=0.5)
+        x = F.dropout(x, p=0.5)
         x = self.conv2(x, adj_t)
         x = self.bns[1](x)
         x = F.relu(x)
-        # x = F.dropout(x, p=0.5)
-        x = self.conv3(x, adj_t)  # + x
-
-        return x
+        x = F.dropout(x, p=0.5)
+        x = self.conv3(x, adj_t)
+        return F.relu(x)
 
 
 class GATPROTEINS(torch.nn.Module):
@@ -526,9 +537,108 @@ class GCNCIRCLES(torch.nn.Module):
 
         x = self.conv1(x, edge_index)
         x = F.relu(x)
-
         x = self.conv2(x, edge_index)
         x = F.relu(x)
         x = self.conv3(x, edge_index)
 
         return x
+
+
+class GNN_node(torch.nn.Module):
+    """
+    Output:
+        node representations
+    """
+
+    @staticmethod
+    def need_deg():
+        return False
+
+    def __init__(
+        self,
+        num_layer,
+        emb_dim,
+        drop_ratio=0.5,
+        JK="last",
+        residual=True,
+        gnn_type="gcn",
+    ):
+        """
+        emb_dim (int): node embedding dimensionality
+        num_layer (int): number of GNN message passing layers
+        """
+
+        super(GNN_node, self).__init__()
+        self.num_layer = num_layer
+        self.drop_ratio = drop_ratio
+        self.JK = JK
+        ### add residual connection or not
+        self.residual = residual
+
+        if self.num_layer < 2:
+            raise ValueError("Number of GNN layers must be greater than 1.")
+
+        self.node_encoder = torch.nn.Linear(128, emb_dim)
+
+        ###List of GNNs
+        self.convs = torch.nn.ModuleList()
+        self.batch_norms = torch.nn.ModuleList()
+
+        for layer in range(num_layer):
+            if gnn_type == "gin":
+                raise NotImplementedError()
+            elif gnn_type == "gcn":
+                self.convs.append(GCNConvGeometric(emb_dim, emb_dim))
+            else:
+                ValueError("Undefined GNN type called {}".format(gnn_type))
+
+            self.batch_norms.append(torch.nn.BatchNorm1d(emb_dim))
+
+    def forward(self, batched_data, perturb=None):
+        x, adj_t = (
+            batched_data.x,
+            batched_data.adj_t,
+        )
+        node_depth = (
+            batched_data.node_depth if hasattr(batched_data, "node_depth") else None
+        )
+
+        ### computing input node embedding
+        if self.node_encoder is not None:
+            encoded_node = (
+                self.node_encoder(x)
+                if node_depth is None
+                else self.node_encoder(x, node_depth.view(-1,),)
+            )
+        else:
+            encoded_node = x
+        tmp = encoded_node + perturb if perturb is not None else encoded_node
+        h_list = [tmp]
+
+        for layer in range(self.num_layer):
+
+            h = self.convs[layer](h_list[layer], adj_t)
+            h = self.batch_norms[layer](h)
+
+            if layer == self.num_layer - 1:
+                # remove relu for the last layer
+                h = F.dropout(h, self.drop_ratio)
+            else:
+                h = F.dropout(F.relu(h), self.drop_ratio)
+
+            if self.residual:
+                h += h_list[layer]
+
+            h_list.append(h)
+
+        ### Different implementations of Jk-concat
+        if self.JK == "last":
+            node_representation = h_list[-1]
+        elif self.JK == "sum":
+            node_representation = 0
+            for layer in range(self.num_layer):
+                node_representation += h_list[layer]
+        elif self.JK == "cat":
+            node_representation = torch.cat([h_list[0], h_list[-1]], dim=-1)
+
+        return node_representation

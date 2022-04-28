@@ -3,23 +3,26 @@
 from functools import wraps
 
 import torch
+from torch import nn, einsum
 import torch.nn.functional as F
 
-from torch import nn, einsum
-
 from einops import rearrange, repeat
+
+import torch
+import torch.nn.functional as F
+
+
 import math
 
 from .gnn import (
     GCNCORA,
-    GCNPROTEINS,
+    GCNPROTEINSFULL,
     SAGEPROTEINS,
     GATPROTEINS,
     NNCONVPROTEINS,
     SAGEPROTEINSEMBED,
     GCNARXIV,
     GCNCIRCLES,
-    GNN_node,
 )
 
 
@@ -145,6 +148,9 @@ def init_params(module, n_layers):
         module.weight.data.normal_(mean=0.0, std=0.02)
 
 
+# main class
+
+
 class PerceiverIO(nn.Module):
     def __init__(
         self,
@@ -169,12 +175,17 @@ class PerceiverIO(nn.Module):
 
         if gnn_encoder is None:
 
-            self.gnn = GCNARXIV(gnn_embed_dim)
+            self.gnn = GCNPROTEINSFULL(gnn_embed_dim)
+            # self.gnn = SAGEPROTEINSEMBED(gnn_embed_dim)
+            # self.gnn = GCNCIRCLES(gnn_embed_dim)
+            # self.gnn = SAGEPROTEINS(gnn_embed_dim)
 
         else:
             self.gnn1 = gnn_encoder
             self.out_gnn = nn.Linear(gnn_embed_dim, logits_dim)
         self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
+
+        self.linear_input = nn.Linear(8, gnn_embed_dim)
 
         self.cross_attend_block = nn.ModuleList(
             [
@@ -188,6 +199,7 @@ class PerceiverIO(nn.Module):
                         dropout=attn_dropout,
                     ),
                     context_dim=queries_dim,
+                    do_norm_context=False,
                 ),
                 PreNorm(latent_dim, FeedForward(latent_dim, dropout=ff_dropout)),
             ]
@@ -242,13 +254,20 @@ class PerceiverIO(nn.Module):
 
         self.apply(lambda module: init_params(module, n_layers=depth))
 
-    def forward(self, batch, mask=None, queries=None):
+    def forward(self, batch_sampled, batch_full, mask=None, queries=None):
 
         attns = []
 
-        data = self.gnn(batch).unsqueeze(0)
+        data = self.linear_input(batch_full.x)
+        batch_sampled.x = data[batch_sampled.n_id]
+        sampled = self.gnn(batch_sampled)
         # return data.squeeze(0), None
 
+        data[batch_sampled.n_id] = sampled
+        data = data.unsqueeze(0)
+
+        del batch_sampled
+        del batch_full
         if queries is None:
             queries = data
 
@@ -285,6 +304,7 @@ class PerceiverIO(nn.Module):
         # out = torch.cat([latents, queries], dim=-1)
 
         out = latents
+
         logits = self.to_logits(out)
         return logits.squeeze(0), attns
 

@@ -1,15 +1,15 @@
 run:
-  name: "full+gcn+different"
-  seed: 99
+  name: "sage+transformer+noconcat"
+  seed: 1
   log: true
   dataset: "ogbn-proteins"
   resume: false
-  checkpoint_path: "outputs/2022-04-05/10-04-03/checkpoints/last.ckpt"
+  checkpoint_path: outputs/2022-04-25/12-13-40/checkpoints/last.ckpt
   test_only: false
 
 train:
   gpus: 1
-  epochs: 2000
+  epochs: 1000
   num_workers: 32
 
 model:
@@ -18,11 +18,11 @@ model:
   attn_dropout: 0.0
   ff_dropout: 0.0
   gnn_embed_dim: 256
-  num_latents: 1024
-  latent_dim: 32
+  num_latents: 256
+  latent_dim: 128
   cross_heads: 4
   latent_heads: 4
   cross_dim_head: 8
   latent_dim_head: 8
-  lr: 0.0001
+  lr: 0.001
   

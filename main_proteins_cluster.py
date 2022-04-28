@@ -1,5 +1,5 @@
 import pytorch_lightning as pl
-from model.classifier_io import PerceiverIOClassifier
+from model.classifier_io_cluster import PerceiverIOClassifier
 
 
 from torch_geometric.loader import DataLoader
@@ -20,6 +20,12 @@ import torch
 import torch.nn.functional as F
 from synthetic.circles import get_circles_dataset
 
+from torch_geometric.loader import RandomNodeSampler, NeighborLoader
+
+from pytorch_lightning.trainer.supporters import CombinedLoader
+
+from torch_scatter import scatter
+
 
 @hydra.main(config_path="conf", config_name="proteins")
 def main(cfg: DictConfig):
@@ -28,38 +34,64 @@ def main(cfg: DictConfig):
 
     if cfg.run.dataset == "ogbn-proteins":
         dataset = PygNodePropPredDataset(
+            name=cfg.run.dataset, root=os.path.join(get_original_cwd(), "./data",)
+        )
+
+        data = dataset[0]
+
+        splitted_idx = dataset.get_idx_split()
+
+        train_idx, valid_idx, test_idx = (
+            splitted_idx["train"],
+            splitted_idx["valid"],
+            splitted_idx["test"],
+        )
+
+        for split in ["train", "valid", "test"]:
+            mask = torch.zeros(data.num_nodes, dtype=torch.bool)
+            mask[splitted_idx[split]] = True
+            data[f"{split}_mask"] = mask
+
+        row, col = data.edge_index
+        data.x = scatter(data.edge_attr, col, 0, dim_size=data.num_nodes, reduce="add")
+        data.n_id = torch.arange(data.num_nodes)
+
+        train_loader = RandomNodeSampler(data, num_parts=5, shuffle=True, num_workers=5)
+        valid_loader = RandomNodeSampler(data, num_parts=5, num_workers=5)
+
+        # train_loader = NeighborLoader(data, [30, 60, 90])
+        # valid_loader = NeighborLoader(data, [30, 60, 90])
+
+        dataset = PygNodePropPredDataset(
             name=cfg.run.dataset,
             root=os.path.join(get_original_cwd(), "./data",),
             transform=T.ToSparseTensor(attr="edge_attr"),
         )
 
-        split_idx = dataset.get_idx_split()
-
-        train_idx, valid_idx, test_idx = (
-            split_idx["train"],
-            split_idx["valid"],
-            split_idx["test"],
-        )
-
         data = dataset[0]
         data.x = data.adj_t.sum(dim=1)
-        data.adj_t.set_value_(None)
+        del data.adj_t
+        # data.adj_t.set_value_(None)
 
-        # Pre-compute GCN normalization.
-        adj_t = data.adj_t.set_diag()
-        deg = adj_t.sum(dim=1).to(torch.float)
-        deg_inv_sqrt = deg.pow(-0.5)
-        deg_inv_sqrt[deg_inv_sqrt == float("inf")] = 0
-        adj_t = deg_inv_sqrt.view(-1, 1) * adj_t * deg_inv_sqrt.view(1, -1)
-        data.adj_t = adj_t
+        # # Pre-compute GCN normalization.
+        # adj_t = data.adj_t.set_diag()
+        # deg = adj_t.sum(dim=1).to(torch.float)
+        # deg_inv_sqrt = deg.pow(-0.5)
+        # deg_inv_sqrt[deg_inv_sqrt == float("inf")] = 0
+        # adj_t = deg_inv_sqrt.view(-1, 1) * adj_t * deg_inv_sqrt.view(1, -1)
+        # data.adj_t = adj_t
 
         dataset = [data]
+
+        train_loader_full = DataLoader(dataset, batch_size=1, num_workers=32)
     elif cfg.run.dataset == "circles":
         dataset, train_idx, valid_idx, test_idx = get_circles_dataset()
 
-    train_loader = DataLoader(dataset, batch_size=1, num_workers=32)
+    # train_loader = DataLoader(dataset, batch_size=1, num_workers=32)
+
     lr_monitor = LearningRateMonitor(logging_interval="step")
 
+    logger = None
     if cfg.run.log:
 
         exp_name = f"{cfg.run.dataset}+seed-{cfg.run.seed}+{cfg.run.name}"
@@ -80,10 +112,10 @@ def main(cfg: DictConfig):
     )
 
     model = PerceiverIOClassifier(
-        depth=cfg.model.depth,
         train_mask=train_idx,
-        val_mask=valid_idx,
+        valid_mask=valid_idx,
         test_mask=test_idx,
+        depth=cfg.model.depth,
         dataset=cfg.run.dataset,
         logits_dim=cfg.model.logits_dim,
         gnn_embed_dim=cfg.model.gnn_embed_dim,
@@ -102,17 +134,19 @@ def main(cfg: DictConfig):
         log_every_n_steps=1,
         logger=logger,
         callbacks=[lr_monitor, checkpoint_callback],
-        check_val_every_n_epoch=5,
+        check_val_every_n_epoch=1,
     )
 
-    log_hyperparameters(
-        config=cfg,
-        model=model,
-        datamodule=None,
-        trainer=trainer,
-        callbacks=None,
-        logger=logger,
-    )
+    if logger is not None:
+
+        log_hyperparameters(
+            config=cfg,
+            model=model,
+            datamodule=None,
+            trainer=trainer,
+            callbacks=None,
+            logger=logger,
+        )
 
     if cfg.run.test_only:
         model = PerceiverIOClassifier.load_from_checkpoint(
@@ -125,9 +159,15 @@ def main(cfg: DictConfig):
 
         sys.exit(1)
 
+    combined_loader = CombinedLoader(
+        [valid_loader, train_loader_full], mode="max_size_cycle"
+    )
+
     if not cfg.run.resume:
         trainer.fit(
-            model, train_loader, train_loader,
+            model,
+            {"train1": train_loader, "train_full": train_loader_full},
+            combined_loader,
         )
 
     else:

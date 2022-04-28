@@ -1,7 +1,7 @@
 run:
-  name: "more_more_latents"
+  name: "arxiv-test"
   seed: 42
-  log: false
+  log: true
   dataset: "ogbn-arxiv"
   resume: false
   checkpoint_path:
@@ -16,14 +16,14 @@ model:
   depth: 3
   logits_dim: 40
   attn_dropout: 0.1
-  ff_dropout: 0.3
+  ff_dropout: 0.1
   gnn_embed_dim: 256
-  num_latents: 4
-  latent_dim: 256
+  num_latents: 32
+  latent_dim: 128
   cross_heads: 4
   latent_heads: 4
   cross_dim_head: 4
   latent_dim_head: 4
-  lr: 0.0001
+  lr: 0.0005
   weight_tie_layers: false
   
