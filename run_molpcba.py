@@ -16,7 +16,9 @@ import os
 from util import log_hyperparameters
 
 import torch
-torch.multiprocessing.set_sharing_strategy('file_system')
+
+# torch.multiprocessing.set_sharing_strategy('file_system')
+
 
 @hydra.main(config_path="conf", config_name="molpcba")
 def main(cfg: DictConfig):

@@ -26,40 +26,38 @@ def main(cfg: DictConfig):
 
     pl.seed_everything(cfg.run.seed)
 
-    if cfg.run.dataset == "ogbn-proteins":
-        dataset = PygNodePropPredDataset(
-            name=cfg.run.dataset,
-            root=os.path.join(get_original_cwd(), "./data",),
-            transform=T.ToSparseTensor(attr="edge_attr"),
-        )
+    dataset = PygNodePropPredDataset(
+        name=cfg.run.dataset,
+        root=os.path.join(get_original_cwd(), "./data",),
+        transform=T.ToSparseTensor(attr="edge_attr"),
+    )
 
-        split_idx = dataset.get_idx_split()
+    split_idx = dataset.get_idx_split()
 
-        train_idx, valid_idx, test_idx = (
-            split_idx["train"],
-            split_idx["valid"],
-            split_idx["test"],
-        )
+    train_idx, valid_idx, test_idx = (
+        split_idx["train"],
+        split_idx["valid"],
+        split_idx["test"],
+    )
 
-        data = dataset[0]
-        data.x = data.adj_t.sum(dim=1)
-        data.adj_t.set_value_(None)
+    data = dataset[0]
+    data.x = data.adj_t.sum(dim=1)
+    data.adj_t.set_value_(None)
 
-        # Pre-compute GCN normalization.
-        adj_t = data.adj_t.set_diag()
-        deg = adj_t.sum(dim=1).to(torch.float)
-        deg_inv_sqrt = deg.pow(-0.5)
-        deg_inv_sqrt[deg_inv_sqrt == float("inf")] = 0
-        adj_t = deg_inv_sqrt.view(-1, 1) * adj_t * deg_inv_sqrt.view(1, -1)
-        data.adj_t = adj_t
+    # Pre-compute GCN normalization.
+    adj_t = data.adj_t.set_diag()
+    deg = adj_t.sum(dim=1).to(torch.float)
+    deg_inv_sqrt = deg.pow(-0.5)
+    deg_inv_sqrt[deg_inv_sqrt == float("inf")] = 0
+    adj_t = deg_inv_sqrt.view(-1, 1) * adj_t * deg_inv_sqrt.view(1, -1)
+    data.adj_t = adj_t
 
-        dataset = [data]
-    elif cfg.run.dataset == "circles":
-        dataset, train_idx, valid_idx, test_idx = get_circles_dataset()
+    dataset = [data]
 
-    train_loader = DataLoader(dataset, batch_size=1, num_workers=32)
+    train_loader = DataLoader(dataset, batch_size=1, num_workers=1)
     lr_monitor = LearningRateMonitor(logging_interval="step")
 
+    logger = None
     if cfg.run.log:
 
         exp_name = f"{cfg.run.dataset}+seed-{cfg.run.seed}+{cfg.run.name}"
@@ -67,7 +65,7 @@ def main(cfg: DictConfig):
 
     if cfg.run.dataset == "ogbn-proteins":
         monitor = "val/rocauc"
-    elif cfg.run.dataset in ["ogbg-arxiv", "circles"]:
+    elif cfg.run.dataset in ["ogbg-arxiv"]:
         monitor = "val/acc"
     checkpoint_callback = ModelCheckpoint(
         monitor=monitor,
@@ -81,6 +79,7 @@ def main(cfg: DictConfig):
 
     model = PerceiverIOClassifier(
         depth=cfg.model.depth,
+        queries_dim=cfg.model.queries_dim,
         train_mask=train_idx,
         val_mask=valid_idx,
         test_mask=test_idx,
@@ -103,16 +102,18 @@ def main(cfg: DictConfig):
         logger=logger,
         callbacks=[lr_monitor, checkpoint_callback],
         check_val_every_n_epoch=5,
+        # gradient_clip_val=0.5,
     )
 
-    log_hyperparameters(
-        config=cfg,
-        model=model,
-        datamodule=None,
-        trainer=trainer,
-        callbacks=None,
-        logger=logger,
-    )
+    if logger:
+        log_hyperparameters(
+            config=cfg,
+            model=model,
+            datamodule=None,
+            trainer=trainer,
+            callbacks=None,
+            logger=logger,
+        )
 
     if cfg.run.test_only:
         model = PerceiverIOClassifier.load_from_checkpoint(

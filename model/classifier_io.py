@@ -55,16 +55,17 @@ class PerceiverIOClassifier(pl.LightningModule):
 
         self.lr = lr
 
-        queries_dim = gnn_embed_dim
         self.dataset = dataset
 
         dataset = "ogbn-arxiv" if dataset == "circles" else dataset
-        self.evaluator = Evaluator(name=dataset)
+
+        try:
+            self.evaluator = Evaluator(name=dataset)
+        except:
+            pass
 
         # gnn = SAGEPROTEINSEMBED(gnn_embed_dim)
         # gnn = torch.load(os.path.join(get_original_cwd(), "sage.pt"))
-
-        gnn = None
 
         self.perceiver = PerceiverIO(
             gnn_embed_dim=gnn_embed_dim,
@@ -81,7 +82,7 @@ class PerceiverIOClassifier(pl.LightningModule):
             weight_tie_layers=weight_tie_layers,
             attn_dropout=attn_dropout,
             ff_dropout=ff_dropout,
-            gnn_encoder=gnn,
+            gnn_encoder=None,
         )
 
     def forward(self, x, **kwargs):
@@ -90,55 +91,51 @@ class PerceiverIOClassifier(pl.LightningModule):
     def training_step(self, batch, batch_idx):
 
         if self.dataset == "cora":
-            y_hat = self(batch)[:, batch.train_mask].transpose(1, 2)
-            y = batch.y[batch.train_mask].unsqueeze(0)
-            loss = F.cross_entropy(y_hat, y)
+            y_hat = self(batch)[batch.train_mask[:, 0]]
+            y = batch.y[batch.train_mask[:, 0]]
+            train_loss = F.cross_entropy(y_hat, y)
 
-            acc = torchmetrics.functional.accuracy(torch.argmax(y_hat, dim=-2), y)
+            acc = torchmetrics.functional.accuracy(torch.argmax(y_hat, dim=-1), y)
             self.log("train/acc", acc)
-            self.log("train/loss", loss)
+            self.log("train/loss", train_loss)
 
-        elif self.dataset in ["ogbn-arxiv", "circles"]:
-            y_hat = self(batch)[0][self.train_mask]
+        elif self.dataset == "ogbn-arxiv":
+            y_hat = self(batch)[self.train_mask]
             y = batch.y[self.train_mask].squeeze(-1)
             train_loss = F.cross_entropy(y_hat, y)
 
-            # acc = self.evaluator.eval(
-            #     {
-            #         "y_true": batch.y[self.train_mask],
-            #         "y_pred": y_hat.squeeze(0).argmax(dim=-1, keepdim=True)[
-            #             self.train_mask
-            #         ].detach(),
-            #     }
-            # )["acc"]
-            # self.log("train/acc", acc, batch_size=1)
             self.log("train/loss", train_loss, batch_size=1)
         elif self.dataset == "ogbn-proteins":
 
-            y_hat = self(batch)[0]
+            y_hat = self(batch)
             y_hat_train = y_hat[self.train_mask]
-            y = batch.y[self.train_mask].float()
+            y = batch.y[self.train_mask].to(torch.float)
             train_loss = F.binary_cross_entropy_with_logits(y_hat_train, y)
 
-            self.log("train/loss", train_loss, batch_size=1)
+            rocauc = self.evaluator.eval(
+                {"y_true": batch.y[self.train_mask], "y_pred": y_hat_train}
+            )["rocauc"]
+
+            self.log("train/rocauc", rocauc)
+            self.log("train/loss", train_loss)
 
         return train_loss
 
     def evaluate(self, batch, stage=None):
 
         if self.dataset == "cora":
-            y_hat = self(batch)[:, batch.val_mask].transpose(1, 2)
+            y_hat = self(batch)[batch.val_mask[:, 0]]
 
-            y = batch.y[batch.val_mask].unsqueeze(0)
+            y = batch.y[batch.val_mask[:, 0]]
             loss = F.cross_entropy(y_hat, y)
 
-            acc = torchmetrics.functional.accuracy(torch.argmax(y_hat, dim=-2), y)
+            acc = torchmetrics.functional.accuracy(torch.argmax(y_hat, dim=-1), y)
             self.log("val/acc", acc, batch_size=1)
             self.log("val/loss", loss, batch_size=1)
 
-        elif self.dataset in ["ogbn-arxiv", "circles"]:
+        elif self.dataset == "ogbn-arxiv":
 
-            out, _ = self(batch)
+            out = self(batch)
             y_hat = out[self.val_mask]
 
             y = batch.y[self.val_mask].squeeze(-1)
@@ -156,11 +153,11 @@ class PerceiverIOClassifier(pl.LightningModule):
             self.log("val/loss", loss, batch_size=1)
 
         elif self.dataset == "ogbn-proteins":
-            y_hat, attns = self(batch)
+            y_hat = self(batch)
             y_hat_val = y_hat[self.val_mask]
             y_hat_test = y_hat[self.test_mask]
 
-            y = batch.y[self.val_mask].float()
+            y = batch.y[self.val_mask].to(torch.float)
             val_loss = F.binary_cross_entropy_with_logits(y_hat_val, y)
 
             rocauc = self.evaluator.eval(
@@ -188,11 +185,11 @@ class PerceiverIOClassifier(pl.LightningModule):
 
     def test_step(self, batch, batch_idx):
         if self.dataset == "ogbn-proteins":
-            y_hat, attns = self(batch)
-            y_hat_val = y_hat[self.test_mask]
+            y_hat = self(batch)
+            y_hat_test = y_hat[self.test_mask]
 
             rocauc = self.evaluator.eval(
-                {"y_true": batch.y[self.test_mask], "y_pred": y_hat_val}
+                {"y_true": batch.y[self.test_mask], "y_pred": y_hat_test}
             )["rocauc"]
             self.log("test/rocauc", rocauc, batch_size=1)
 
@@ -216,7 +213,7 @@ class PerceiverIOClassifier(pl.LightningModule):
         # optimizer = torch.optim.Adam(
         #     [
         #         {"params": [i[1] for i in l1], "lr": 0.01},
-        #         {"params": [i[1] for i in l2], "lr": 0.0005},
+        #         {"params": [i[1] for i in l2], "lr": 0.0001},
         #     ]
         # )
 

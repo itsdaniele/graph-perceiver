@@ -173,14 +173,14 @@ class Perceiver(nn.Module):
             )
 
         # for code
-        self.gnn = GNN_node_Virtualnode(
-            4,
-            gnn_embed_dim,
-            node_encoder_cls(),
-            edge_encoder_cls,
-            gnn_type="gcn",
-            drop_ratio=0.0,
-        )
+        # self.gnn = GNN_node_Virtualnode(
+        #     4,
+        #     gnn_embed_dim,
+        #     node_encoder_cls(),
+        #     edge_encoder_cls,
+        #     gnn_type="gcn",
+        #     drop_ratio=0.0,
+        # )
 
         # if dataset_name == "nci":
 

@@ -68,6 +68,7 @@ def main(cfg: DictConfig):
 
     model = PerceiverIOClassifier(
         depth=cfg.model.depth,
+        queries_dim=cfg.model.queries_dim,
         train_mask=train_idx,
         val_mask=valid_idx,
         test_mask=test_idx,
