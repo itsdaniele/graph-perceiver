@@ -1,28 +1,34 @@
 run:
-  seed: 33
-  log: true
+  seed: 42
+  log: false
   dataset: "ogbg-molpcba"
-  name: "newseed"
+  name: "test"
   test: true
   resume: false
   checkpoint_path: 
 
   batch_size_train: 256
-  batch_size_val: 1024
+  batch_size_val: 256
   batch_size_test: 256
 
 train:
-  
   gpus: 1
   epochs: 100
   num_workers: 32
 
 model:
-  input_channels: 64
   depth: 4
-  attn_dropout: 0.0
   ff_dropout: 0.1
+  attn_dropout: 0.1
+  gnn_dropout: 0.1
+  gnn_embed_dim: 300
+  queries_dim: 256
+  num_gnn_layers: 4
+  num_latents: 16
+  latent_dim: 256
+  cross_dim_head: 64
+  latent_dim_head: 64
   weight_tie_layers: false
-  virtual_latent: true
   loss_fn: "bce"
+  gnn_type: "gin-virtual"
   lr: 0.0001

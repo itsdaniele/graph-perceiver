@@ -1,5 +1,8 @@
 from .perceiver import Perceiver
+from .gnn import GNN_node_Virtualnode
 
+
+from ogb.graphproppred.mol_encoder import AtomEncoder, BondEncoder
 
 import pytorch_lightning as pl
 import torch
@@ -10,25 +13,25 @@ class PerceiverClassifier(pl.LightningModule):
         self,
         evaluator,
         num_classes,
-        input_channels,
         loss_fn,
         dataset,
         gnn_embed_dim=32,
         depth=8,
         num_latents=8,
         latent_dim=200,
+        queries_dim=200,
         cross_heads=8,
         latent_heads=8,
         cross_dim_head=8,
         latent_dim_head=8,
         attn_dropout=0.0,
         ff_dropout=0.0,
+        gnn_dropout=0.0,
         weight_tie_layers=False,
         self_per_cross_attn=1,
-        virtual_latent=False,
+        gnn_type="gin-virtual",
+        num_gnn_layers=3,
         lr=0.0001,
-        node_encoder_cls=None,
-        edge_encoder_cls=None,
         arr_to_seq=None,
         max_seq_len=None,
     ):
@@ -53,12 +56,27 @@ class PerceiverClassifier(pl.LightningModule):
                 "val/loss": [],
             }
 
+        gnn = None
+        if dataset in ["ogbg-molhiv", "ogbg-molpcba"]:
+            if gnn_type == "gin-virtual":
+                gnn = GNN_node_Virtualnode(
+                    num_gnn_layers,
+                    gnn_embed_dim,
+                    AtomEncoder(gnn_embed_dim),
+                    BondEncoder,
+                    gnn_type="gin",
+                    drop_ratio=gnn_dropout,
+                )
+        else:
+            raise NotImplementedError()
+
         self.perceiver = Perceiver(
-            input_channels=input_channels,
             gnn_embed_dim=gnn_embed_dim,
             depth=depth,
+            gnn=gnn,
             num_latents=num_latents,
             latent_dim=latent_dim,
+            queries_dim=queries_dim,
             cross_heads=cross_heads,
             latent_heads=latent_heads,
             cross_dim_head=cross_dim_head,
@@ -67,10 +85,7 @@ class PerceiverClassifier(pl.LightningModule):
             ff_dropout=ff_dropout,
             weight_tie_layers=weight_tie_layers,
             self_per_cross_attn=self_per_cross_attn,
-            virtual_latent=virtual_latent,
             num_classes=num_classes,
-            node_encoder_cls=node_encoder_cls,
-            edge_encoder_cls=edge_encoder_cls,
             max_seq_len=max_seq_len,
         )
 
@@ -164,9 +179,6 @@ class PerceiverClassifier(pl.LightningModule):
             seq_pred = [self.arr_to_seq(arr) for arr in mat]
             seq_ref = [batch.y[i] for i in range(len(batch.y))]
 
-            # seq_ref_list.extend(seq_ref)
-            # seq_pred_list.extend(seq_pred)
-
         input_dict = {"seq_ref": seq_ref, "seq_pred": seq_pred}
         f1 = self.evaluator.eval(input_dict)["F1"]
         self.log("val/F1", f1)
@@ -202,7 +214,6 @@ class PerceiverClassifier(pl.LightningModule):
             return self.evaluate(batch, "test")
 
     def test_epoch_end(self, outputs):
-
         if self.dataset == "ogbg-molhiv":
             self.log("test/rocauc", self.calculate_metric(outputs), prog_bar=False)
 

@@ -26,4 +26,5 @@ model:
   cross_dim_head: 8
   latent_dim_head: 8
   lr: 0.0001
+  gnn_type: "gin-virtual"
   

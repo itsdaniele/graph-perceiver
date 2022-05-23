@@ -148,8 +148,6 @@ class PerceiverIO(nn.Module):
         latent_dim_head,
         weight_tie_layers,
         decoder_ff,
-        attn_dropout,
-        ff_dropout,
         gnn_encoder,
     ):
         super().__init__()
@@ -217,7 +215,6 @@ class PerceiverIO(nn.Module):
     def forward(self, batch, mask=None, queries=None):
 
         initial = self.to_dim(batch.x).unsqueeze(0)
-
         data = self.gnn(batch).unsqueeze(0)
 
         if queries is None:

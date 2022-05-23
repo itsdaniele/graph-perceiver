@@ -74,8 +74,8 @@ class FeedForward(nn.Module):
         self.net = nn.Sequential(
             nn.Linear(dim, dim * mult * 2),
             GEGLU(),
-            nn.Dropout(dropout),
             nn.Linear(dim * mult, dim),
+            nn.Dropout(dropout),
         )
 
     def forward(self, x):
@@ -94,9 +94,8 @@ class Attention(nn.Module):
         self.to_q = nn.Linear(query_dim, inner_dim, bias=False)
         self.to_kv = nn.Linear(context_dim, inner_dim * 2, bias=False)
 
-        self.to_out = nn.Sequential(
-            nn.Linear(inner_dim, query_dim), nn.Dropout(dropout)
-        )
+        self.dropout = nn.Dropout(dropout)
+        self.to_out = nn.Linear(inner_dim, query_dim)
 
     def forward(self, x, context=None, mask=None):
         h = self.heads
@@ -117,6 +116,7 @@ class Attention(nn.Module):
 
         # attention, what we cannot get enough of
         attn = sim.softmax(dim=-1)
+        attn = self.dropout(attn)
 
         out = einsum("b i j, b j d -> b i d", attn, v)
         out = rearrange(out, "(b h) n d -> b n (h d)", h=h)
@@ -137,11 +137,12 @@ class Perceiver(nn.Module):
         self,
         *,
         depth,
-        input_channels,
         num_classes,
+        gnn,
         gnn_embed_dim=256,
         num_latents=512,
         latent_dim=512,
+        queries_dim=256,
         cross_heads=1,
         latent_heads=8,
         cross_dim_head=64,
@@ -150,27 +151,13 @@ class Perceiver(nn.Module):
         ff_dropout=0.0,
         weight_tie_layers=False,
         self_per_cross_attn=1,
-        final_head=True,
-        virtual_latent=False,
-        node_encoder_cls=None,
-        edge_encoder_cls=None,
         max_seq_len=None
     ):
 
         super().__init__()
 
-        self.virtual_latent = virtual_latent
         self.max_seq_len = max_seq_len
-
-        if node_encoder_cls is not None:
-            self.gnn = GNN_node_Virtualnode(
-                3, gnn_embed_dim, node_encoder_cls(), edge_encoder_cls, gnn_type="gin"
-            )
-        else:
-            # default for molecular datasets
-            self.gnn = GNN_node_Virtualnode(
-                3, gnn_embed_dim, AtomEncoder(gnn_embed_dim), BondEncoder
-            )
+        self.gnn = gnn
 
         # for code
         # self.gnn = GNN_node_Virtualnode(
@@ -204,17 +191,18 @@ class Perceiver(nn.Module):
         #     )
 
         self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
+        self.to_dim = nn.Linear(gnn_embed_dim, queries_dim)
 
         get_cross_attn = lambda: PreNorm(
             latent_dim,
             Attention(
                 latent_dim,
-                gnn_embed_dim,
+                queries_dim,
                 heads=cross_heads,
                 dim_head=cross_dim_head,
                 dropout=attn_dropout,
             ),
-            context_dim=gnn_embed_dim,
+            context_dim=queries_dim,
         )
         get_cross_ff = lambda: PreNorm(
             latent_dim, FeedForward(latent_dim, dropout=ff_dropout)
@@ -268,22 +256,16 @@ class Perceiver(nn.Module):
                     torch.nn.Linear(latent_dim, num_classes)
                 )
         else:
-            if not virtual_latent:
-                self.to_out = (
-                    nn.Sequential(
-                        nn.LayerNorm(latent_dim), nn.Linear(latent_dim, num_classes),
-                    )
-                    if final_head
-                    else nn.Identity()
-                )
-            else:
-                self.final_virtual = nn.Linear(latent_dim, num_classes)
+
+            self.to_out = nn.Sequential(
+                nn.LayerNorm(latent_dim), nn.Linear(latent_dim, num_classes),
+            )
 
         self.apply(lambda module: init_params(module, n_layers=depth))
 
     def forward(self, batch):
 
-        data = self.gnn(batch)
+        data = self.to_dim(self.gnn(batch))
 
         num_nodes = []
         for i in range(len(batch.batch)):
@@ -308,10 +290,8 @@ class Perceiver(nn.Module):
                 x = self_ff(x) + x
 
         if self.max_seq_len is None:
-            if self.virtual_latent:
-                out = self.final_virtual(x)[:, 0, :]
-            else:
-                out = self.to_out(x).sum(-2) / mask.sum(-1, keepdim=True)
+
+            out = self.to_out(x).mean(-2)
             return out
         else:
             pred_list = []

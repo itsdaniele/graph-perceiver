@@ -10,17 +10,6 @@ import torchmetrics
 from .perceiverio import PerceiverIO
 from ogb.nodeproppred import Evaluator
 
-from torch_poly_lr_decay import PolynomialLRDecay
-from model.gnn import SAGEPROTEINSEMBED
-
-from hydra.utils import get_original_cwd
-from omegaconf import DictConfig
-import os
-
-from util import attention_entropy, get_linear_schedule_with_warmup
-
-import wandb
-
 
 class PerceiverIOClassifier(pl.LightningModule):
     def __init__(
@@ -57,15 +46,10 @@ class PerceiverIOClassifier(pl.LightningModule):
 
         self.dataset = dataset
 
-        dataset = "ogbn-arxiv" if dataset == "circles" else dataset
-
         try:
             self.evaluator = Evaluator(name=dataset)
         except:
             pass
-
-        # gnn = SAGEPROTEINSEMBED(gnn_embed_dim)
-        # gnn = torch.load(os.path.join(get_original_cwd(), "sage.pt"))
 
         self.perceiver = PerceiverIO(
             gnn_embed_dim=gnn_embed_dim,
@@ -90,16 +74,7 @@ class PerceiverIOClassifier(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
 
-        if self.dataset == "cora":
-            y_hat = self(batch)[batch.train_mask[:, 0]]
-            y = batch.y[batch.train_mask[:, 0]]
-            train_loss = F.cross_entropy(y_hat, y)
-
-            acc = torchmetrics.functional.accuracy(torch.argmax(y_hat, dim=-1), y)
-            self.log("train/acc", acc)
-            self.log("train/loss", train_loss)
-
-        elif self.dataset == "ogbn-arxiv":
+        if self.dataset == "ogbn-arxiv":
             y_hat = self(batch)[self.train_mask]
             y = batch.y[self.train_mask].squeeze(-1)
             train_loss = F.cross_entropy(y_hat, y)
@@ -123,17 +98,7 @@ class PerceiverIOClassifier(pl.LightningModule):
 
     def evaluate(self, batch, stage=None):
 
-        if self.dataset == "cora":
-            y_hat = self(batch)[batch.val_mask[:, 0]]
-
-            y = batch.y[batch.val_mask[:, 0]]
-            loss = F.cross_entropy(y_hat, y)
-
-            acc = torchmetrics.functional.accuracy(torch.argmax(y_hat, dim=-1), y)
-            self.log("val/acc", acc, batch_size=1)
-            self.log("val/loss", loss, batch_size=1)
-
-        elif self.dataset == "ogbn-arxiv":
+        if self.dataset == "ogbn-arxiv":
 
             out = self(batch)
             y_hat = out[self.val_mask]
