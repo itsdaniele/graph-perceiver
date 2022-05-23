@@ -1,6 +1,6 @@
 run:
   seed: 42
-  log: false
+  log: true
   dataset: "ogbg-molpcba"
   name: "test"
   test: true

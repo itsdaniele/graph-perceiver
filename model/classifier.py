@@ -103,17 +103,17 @@ class PerceiverClassifier(pl.LightningModule):
                 batch.y.to(torch.float32)[is_labeled],
             )
 
-            res = {
-                "y_true": batch.y.detach().cpu(),
-                "y_pred": y_hat.detach().cpu(),
-            }
+            # res = {
+            #     "y_true": batch.y.detach().cpu(),
+            #     "y_pred": y_hat.detach().cpu(),
+            # }
             self.log("train/loss", loss, on_step=False, on_epoch=True)
-            self.log(
-                "train/ap",
-                self.evaluator.eval(res)["ap"],
-                on_step=False,
-                on_epoch=True,
-            )
+            # self.log(
+            #     "train/ap",
+            #     self.evaluator.eval(res)["ap"],
+            #     on_step=False,
+            #     on_epoch=True,
+            # )
         elif self.dataset == "ogbg-molhiv":
             loss = self.loss_fn(y_hat, batch.y.float())
             self.log("train/loss", loss, on_step=False, on_epoch=True)
@@ -143,14 +143,13 @@ class PerceiverClassifier(pl.LightningModule):
             )
             self.log(f"{stage}/loss", loss)
 
-            res = {
-                "y_true": batch.y.detach().cpu(),
+            # ap = self.evaluator.eval(res)["ap"]
+            # self.log(f"{stage}/ap", ap)
+            return {
+                "loss": loss,
                 "y_pred": y_hat.detach().cpu(),
+                "y_true": batch.y.detach().cpu(),
             }
-
-            ap = self.evaluator.eval(res)["ap"]
-            self.log(f"{stage}/ap", ap)
-            return ap
 
         elif self.dataset == "ogbg-molhiv":
 
@@ -200,6 +199,9 @@ class PerceiverClassifier(pl.LightningModule):
                 "val/rocauc_best", max(self.metric_hist["val/rocauc"]), prog_bar=True
             )
             self.log("val/loss_best", min(self.metric_hist["val/loss"]), prog_bar=False)
+        elif self.dataset == "ogbg-molpcba":
+            ap = self.calculate_metric(outputs)
+            self.log("val/ap", ap, prog_bar=True)
 
     def test_step(self, batch, batch_idx):
 
@@ -216,12 +218,17 @@ class PerceiverClassifier(pl.LightningModule):
     def test_epoch_end(self, outputs):
         if self.dataset == "ogbg-molhiv":
             self.log("test/rocauc", self.calculate_metric(outputs), prog_bar=False)
+        elif self.dataset == "ogbg-molpcba":
+            self.log("test/ap", self.calculate_metric(outputs), prog_bar=False)
 
     def calculate_metric(self, outputs):
         y_true = torch.cat([x["y_true"] for x in outputs], dim=0)
         y_pred = torch.cat([x["y_pred"] for x in outputs], dim=0)
         result_dict = self.evaluator.eval({"y_true": y_true, "y_pred": y_pred})
-        return result_dict["rocauc"]
+        if self.dataset == "ogbg-molhiv":
+            return result_dict["rocauc"]
+        elif self.dataset == "ogbg-molpcba":
+            return result_dict["ap"]
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)

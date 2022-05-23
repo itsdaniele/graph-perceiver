@@ -18,7 +18,7 @@ from util import log_hyperparameters
 import torch
 
 
-@hydra.main(config_path="conf", config_name="molpcba")
+@hydra.main(config_path="conf", config_name="molpcba-v1")
 def main(cfg: DictConfig):
 
     evaluator = Evaluator(name=cfg.run.dataset)
