@@ -1,0 +1,46 @@
+run:
+  seed: 42
+  log: true
+  dataset: "zinc"
+  name: "test"
+  test: true
+  resume: false
+  checkpoint_path: 
+  batch_size: 32
+
+train:
+  gpus: 1
+  epochs: 2000
+  num_workers: 32
+
+
+model:
+  depth: 10
+  ff_dropout: 0.0
+  attn_dropout: 0.5
+  gnn_dropout: 0.0
+  gnn_embed_dim: 64
+  queries_dim: 64
+  num_gnn_layers: 3
+  num_latents: 8
+  latent_heads: 4
+  cross_heads: 4
+  self_per_cross_attn: 1
+  latent_dim: 64
+  cross_dim_head: 64
+  latent_dim_head: 64
+  weight_tie_layers: false
+  loss_fn: "l1"
+  gnn_type: "gcn-virtual"
+  lr: 0.001
+  
+
+optim:
+  batch_accumulation: 1
+  clip_grad_norm: True
+  weight_decay: 1e-5
+  scheduler: cosine_with_warmup
+  scheduler_params:
+    base_lr: 0.001
+    max_epoch: 2000
+    num_warmup_epochs: 50

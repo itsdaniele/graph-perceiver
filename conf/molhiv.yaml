@@ -18,11 +18,13 @@ train:
 model:
   input_channels: 64
   depth: 4
-  attn_dropout: 0.1
-  ff_dropout: 0.1
+  attn_dropout: 0.5
+  ff_dropout: 0.5
+  gnn_dropout: 0.5
   weight_tie_layers: false
   virtual_latent: true
   gnn_embed_dim: 256
+  queries_dim: 256
   num_latents: 12
   latent_dim: 200
   cross_heads: 8
@@ -30,5 +32,6 @@ model:
   cross_dim_head: 8
   latent_dim_head: 8
   loss_fn: "bce"
+  gnn_type: "gin-virtual"
   lr: 0.0001
   

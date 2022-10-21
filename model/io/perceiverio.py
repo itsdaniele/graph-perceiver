@@ -10,7 +10,7 @@ from torch import nn, einsum
 from einops import rearrange, repeat
 import math
 
-from .gnn import (
+from ..gnn import (
     GCNCORA,
     GCNPROTEINS,
     SAGEPROTEINS,

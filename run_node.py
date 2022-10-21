@@ -1,5 +1,5 @@
 import pytorch_lightning as pl
-from model.classifier_io import PerceiverIOClassifier
+from model.io.classifier_io import PerceiverIOClassifier
 
 import torch
 

@@ -1,4 +1,4 @@
-from model.classifier_io import PerceiverIOClassifier
+from model.io.classifier_io import PerceiverIOClassifier
 
 
 from torch_geometric.loader import DataLoader

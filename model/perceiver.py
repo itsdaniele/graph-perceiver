@@ -139,18 +139,18 @@ class Perceiver(nn.Module):
         depth,
         num_classes,
         gnn,
-        gnn_embed_dim=256,
-        num_latents=512,
-        latent_dim=512,
-        queries_dim=256,
-        cross_heads=1,
-        latent_heads=8,
-        cross_dim_head=64,
-        latent_dim_head=64,
-        attn_dropout=0.0,
-        ff_dropout=0.0,
-        weight_tie_layers=False,
-        self_per_cross_attn=1,
+        gnn_embed_dim,
+        num_latents,
+        latent_dim,
+        queries_dim,
+        cross_heads,
+        latent_heads,
+        cross_dim_head,
+        latent_dim_head,
+        attn_dropout,
+        ff_dropout,
+        weight_tie_layers,
+        self_per_cross_attn,
         max_seq_len=None
     ):
 
@@ -158,6 +158,7 @@ class Perceiver(nn.Module):
 
         self.max_seq_len = max_seq_len
         self.gnn = gnn
+        self.node_encoder = AtomEncoder(queries_dim)
 
         # for code
         # self.gnn = GNN_node_Virtualnode(
@@ -191,7 +192,9 @@ class Perceiver(nn.Module):
         #     )
 
         self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
-        self.to_dim = nn.Linear(gnn_embed_dim, queries_dim)
+        self.to_dim = nn.Sequential(
+            nn.LayerNorm(gnn_embed_dim,), nn.Linear(gnn_embed_dim, queries_dim)
+        )
 
         get_cross_attn = lambda: PreNorm(
             latent_dim,
@@ -261,20 +264,35 @@ class Perceiver(nn.Module):
                 nn.LayerNorm(latent_dim), nn.Linear(latent_dim, num_classes),
             )
 
+        self.to_dim = nn.Sequential(
+            nn.LayerNorm(gnn_embed_dim,), nn.Linear(gnn_embed_dim, latent_dim)
+        )
+
         self.apply(lambda module: init_params(module, n_layers=depth))
 
     def forward(self, batch):
 
-        data = self.to_dim(self.gnn(batch))
+        gnn_output = self.gnn(batch)  # [n_nodes, gnn_embed_dim]
+        transformer_input = self.node_encoder(
+            batch.x
+        )  # [n_nodes, transformer_embed_dim]
 
         num_nodes = []
         for i in range(len(batch.batch)):
             mask = batch.batch.eq(i)
             num_node = mask.sum()
             num_nodes.append(num_node)
+        max_num_nodes = max(num_nodes)
+
+        gnn_output, _ = to_dense_batch(
+            gnn_output, batch.batch, max_num_nodes=max_num_nodes
+        )
+        gnn_output = self.to_dim(gnn_output)
 
         ###>3000 for molecukes
-        data, mask = to_dense_batch(data, batch.batch, max_num_nodes=max(num_nodes))
+        data, mask = to_dense_batch(
+            transformer_input, batch.batch, max_num_nodes=max_num_nodes
+        )
 
         b = data.shape[0]
         x = repeat(self.latents, "n d -> b n d", b=b)
@@ -289,9 +307,10 @@ class Perceiver(nn.Module):
                 x = self_attn(x) + x
                 x = self_ff(x) + x
 
-        if self.max_seq_len is None:
+        if self.max_seq_len is None:  # not code2
 
-            out = self.to_out(x).mean(-2)
+            out = x.mean(-2) + gnn_output.mean(-2)
+            out = self.to_out(out)
             return out
         else:
             pred_list = []

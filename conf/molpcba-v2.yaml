@@ -1,26 +1,27 @@
 run:
   seed: 42
-  log: true
+  log: false
   dataset: "ogbg-molpcba"
   name: "test"
   test: true
   resume: false
   checkpoint_path: 
 
-  batch_size_train: 256
-  batch_size_val: 256
-  batch_size_test: 256
+  batch_size_train: 512
+  batch_size_val: 512
+  batch_size_test: 512
 
 train:
   gpus: 1
   epochs: 100
   num_workers: 32
 
+
 model:
   depth: 4
-  ff_dropout: 0.1
-  attn_dropout: 0.1
-  gnn_dropout: 0.1
+  ff_dropout: 0.2
+  attn_dropout: 0.5
+  gnn_dropout: 0.3
   gnn_embed_dim: 300
   queries_dim: 256
   num_gnn_layers: 4
@@ -32,3 +33,14 @@ model:
   loss_fn: "bce"
   gnn_type: "gin-virtual"
   lr: 0.0001
+  
+
+optim:
+  batch_accumulation: 1
+  clip_grad_norm: True
+  weight_decay: 1e-5
+  scheduler: cosine_with_warmup
+  scheduler_params:
+    base_lr: 0.0005
+    max_epoch: 100
+    num_warmup_epochs: 5

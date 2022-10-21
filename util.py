@@ -7,18 +7,19 @@ from pytorch_lightning.utilities import rank_zero_only
 
 import numpy as np
 import torch
+import torch.optim as optim
 
 from scipy.stats import entropy
 
-from torch.optim.lr_scheduler import LambdaLR
-
 
 def get_linear_schedule_with_warmup(
-    optimizer, num_warmup_steps, num_training_steps, last_epoch=-1
+    optimizer, num_warmup_steps: int, num_training_steps: int, last_epoch: int = -1,
 ):
     """
-    Create a schedule with a learning rate that decreases linearly from the initial lr set in the optimizer to 0, after
-    a warmup period during which it increases linearly from 0 to the initial lr set in the optimizer.
+    https://github.com/huggingface/transformers/blob/v4.16.2/src/transformers/optimization.py
+    Create a schedule with a learning rate that decreases linearly from the
+    initial lr set in the optimizer to 0, after a warmup period during which it
+    increases linearly from 0 to the initial lr set in the optimizer.
     Args:
         optimizer ([`~torch.optim.Optimizer`]):
             The optimizer for which to schedule the learning rate.
@@ -34,14 +35,14 @@ def get_linear_schedule_with_warmup(
 
     def lr_lambda(current_step: int):
         if current_step < num_warmup_steps:
-            return float(current_step) / float(max(1, num_warmup_steps))
+            return max(1e-6, float(current_step) / float(max(1, num_warmup_steps)))
         return max(
             0.0,
             float(num_training_steps - current_step)
             / float(max(1, num_training_steps - num_warmup_steps)),
         )
 
-    return LambdaLR(optimizer, lr_lambda, last_epoch)
+    return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch)
 
 
 def attention_entropy(attention):

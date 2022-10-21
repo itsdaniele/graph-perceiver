@@ -1,18 +1,10 @@
 import torch
 import torch.nn.functional as F
-from torch_geometric.nn import (
-    GlobalAttention,
-    MessagePassing,
-    Set2Set,
-    global_add_pool,
-    global_max_pool,
-    global_mean_pool,
-)
+from torch_geometric.nn import global_add_pool
 
 
 from .modules import GCNConv, GINConv
 from torch_geometric.nn import GCNConv as GCNConvGeometric, SAGEConv
-from torch_geometric.utils.dropout import dropout_adj
 
 
 class GNN_node_Virtualnode(torch.nn.Module):
