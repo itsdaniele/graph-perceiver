@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from .glab import GLAB
-from .gnn import GNN_node_Virtualnode
+from .gnn import GNN_node_Virtualnode, GNN_node
 from .modules import GCNConv
 
 from functools import partial
@@ -185,11 +185,12 @@ class GLABClassifierV2(BaseLightning):
         else:
             raise NotImplementedError()
 
-        self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
-
         self.layers = nn.ModuleList([])
 
-        self.to_logits = nn.Linear(gnn_embed_dim, num_classes)
+        self.to_logits = nn.Sequential(
+            nn.Linear(gnn_embed_dim, gnn_embed_dim),
+            nn.Linear(gnn_embed_dim, num_classes),
+        )
         self.to_gnn_dim = AtomEncoder(gnn_embed_dim)
 
         if dataset == "zinc":
@@ -198,13 +199,14 @@ class GLABClassifierV2(BaseLightning):
             edge_encoder_cls = BondEncoder
         else:
             raise NotImplementedError()
-            
+
         for _ in range(depth):
 
             gnn_layer = GCNConv(gnn_embed_dim, edge_encoder_cls)
             glab_layer = GLABLayer(
                 gnn_layer,
                 gnn_embed_dim,
+                num_latents=num_latents,
                 latent_dim=latent_dim,
                 cross_heads=cross_heads,
                 latent_heads=latent_heads,
@@ -233,12 +235,12 @@ class GLABClassifierV2(BaseLightning):
         max_num_nodes = max(num_nodes)
 
         local_out, _ = to_dense_batch(x, batch.batch, max_num_nodes=max_num_nodes)
-
+        latents = None
         for i, (gnn_layer, glab_layer) in enumerate(self.layers):
             x = gnn_layer(x, batch.edge_index, batch.edge_attr)
 
             x_, mask = to_dense_batch(x, batch.batch, max_num_nodes=max_num_nodes)
-            latents = glab_layer(self.latents if i == 0 else latents, x_)
+            latents = glab_layer(x_, latents=latents)
 
         return self.to_logits(latents.mean(-2) + local_out.mean(-2))
 

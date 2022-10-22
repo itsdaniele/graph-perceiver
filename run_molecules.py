@@ -19,7 +19,7 @@ from util import log_hyperparameters
 import torch
 
 
-@hydra.main(config_path="conf", config_name="molpcba-v2")
+@hydra.main(config_path="conf", config_name="zinc")
 def main(cfg: DictConfig):
 
     batch_size = cfg.run.get("batch_size")
