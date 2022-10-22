@@ -1,20 +1,14 @@
-# Code mainly taken from https://github.com/lucidrains/perceiver-pytorch
-
+from math import pi, log
 from functools import wraps
-import math
+
+import torch
 from torch import nn, einsum
+import torch.nn.functional as F
 
 from einops import rearrange, repeat
 from einops.layers.torch import Reduce
 
-import torch
-import torch.nn.functional as F
-
-from torch_geometric.utils import to_dense_batch
-
-from ogb.graphproppred.mol_encoder import AtomEncoder, BondEncoder
-
-from .gnn import GNN_node_Virtualnode
+# helpers
 
 
 def exists(val):
@@ -26,19 +20,33 @@ def default(val, d):
 
 
 def cache_fn(f):
-    cache = None
+    cache = dict()
 
     @wraps(f)
-    def cached_fn(*args, _cache=True, **kwargs):
+    def cached_fn(*args, _cache=True, key=None, **kwargs):
         if not _cache:
             return f(*args, **kwargs)
         nonlocal cache
-        if cache is not None:
-            return cache
-        cache = f(*args, **kwargs)
-        return cache
+        if key in cache:
+            return cache[key]
+        result = f(*args, **kwargs)
+        cache[key] = result
+        return result
 
     return cached_fn
+
+
+def fourier_encode(x, max_freq, num_bands=4):
+    x = x.unsqueeze(-1)
+    device, dtype, orig_x = x.device, x.dtype, x
+
+    scales = torch.linspace(1.0, max_freq / 2, num_bands, device=device, dtype=dtype)
+    scales = scales[(*((None,) * (len(x.shape) - 1)), Ellipsis)]
+
+    x = x * scales * pi
+    x = torch.cat([x.sin(), x.cos()], dim=-1)
+    x = torch.cat((x, orig_x), dim=-1)
+    return x
 
 
 # helper classes
@@ -123,89 +131,83 @@ class Attention(nn.Module):
         return self.to_out(out)
 
 
-def init_params(module, n_layers):
-    if isinstance(module, nn.Linear):
-        module.weight.data.normal_(mean=0.0, std=0.02 / math.sqrt(n_layers))
-        if module.bias is not None:
-            module.bias.data.zero_()
-    if isinstance(module, nn.Embedding):
-        module.weight.data.normal_(mean=0.0, std=0.02)
+# main class
 
 
 class Perceiver(nn.Module):
     def __init__(
         self,
         *,
+        num_freq_bands,
         depth,
-        num_classes,
-        gnn,
-        gnn_embed_dim,
-        num_latents,
-        latent_dim,
-        queries_dim,
-        cross_heads,
-        latent_heads,
-        cross_dim_head,
-        latent_dim_head,
-        attn_dropout,
-        ff_dropout,
-        weight_tie_layers,
-        self_per_cross_attn,
-        max_seq_len=None
+        max_freq,
+        input_channels=3,
+        input_axis=2,
+        num_latents=512,
+        latent_dim=512,
+        cross_heads=1,
+        latent_heads=8,
+        cross_dim_head=64,
+        latent_dim_head=64,
+        num_classes=1000,
+        attn_dropout=0.0,
+        ff_dropout=0.0,
+        weight_tie_layers=False,
+        fourier_encode_data=True,
+        self_per_cross_attn=1,
+        final_classifier_head=True
     ):
+        """The shape of the final attention mechanism will be:
+        depth * (cross attention -> self_per_cross_attn * self attention)
 
+        Args:
+          num_freq_bands: Number of freq bands, with original value (2 * K + 1)
+          depth: Depth of net.
+          max_freq: Maximum frequency, hyperparameter depending on how
+              fine the data is.
+          freq_base: Base for the frequency
+          input_channels: Number of channels for each token of the input.
+          input_axis: Number of axes for input data (2 for images, 3 for video)
+          num_latents: Number of latents, or induced set points, or centroids.
+              Different papers giving it different names.
+          latent_dim: Latent dimension.
+          cross_heads: Number of heads for cross attention. Paper said 1.
+          latent_heads: Number of heads for latent self attention, 8.
+          cross_dim_head: Number of dimensions per cross attention head.
+          latent_dim_head: Number of dimensions per latent self attention head.
+          num_classes: Output number of classes.
+          attn_dropout: Attention dropout
+          ff_dropout: Feedforward dropout
+          weight_tie_layers: Whether to weight tie layers (optional).
+          fourier_encode_data: Whether to auto-fourier encode the data, using
+              the input_axis given. defaults to True, but can be turned off
+              if you are fourier encoding the data yourself.
+          self_per_cross_attn: Number of self attention blocks per cross attn.
+          final_classifier_head: mean pool and project embeddings to number of classes (num_classes) at the end
+        """
         super().__init__()
+        self.input_axis = input_axis
+        self.max_freq = max_freq
+        self.num_freq_bands = num_freq_bands
 
-        self.max_seq_len = max_seq_len
-        self.gnn = gnn
-        self.node_encoder = AtomEncoder(queries_dim)
-
-        # for code
-        # self.gnn = GNN_node_Virtualnode(
-        #     4,
-        #     gnn_embed_dim,
-        #     node_encoder_cls(),
-        #     edge_encoder_cls,
-        #     gnn_type="gcn",
-        #     drop_ratio=0.0,
-        # )
-
-        # if dataset_name == "nci":
-
-        #     def edge_encoder_cls(_):
-        #         def zero(_):
-        #             return 0
-
-        #         return zero
-
-        #     self.gnn = GNN_node_Virtualnode(
-        #         3,
-        #         gnn_embed_dim,
-        #         torch.nn.Linear(input_channels, gnn_embed_dim),
-        #         edge_encoder_cls,
-        #         gnn_type="gin",
-        #         drop_ratio=0.5,
-        #     )
-        # else:
-        #     self.gnn = GNN_node_Virtualnode(
-        #         3, gnn_embed_dim, AtomEncoder(gnn_embed_dim), BondEncoder
-        #     )
+        self.fourier_encode_data = fourier_encode_data
+        fourier_channels = (
+            (input_axis * ((num_freq_bands * 2) + 1)) if fourier_encode_data else 0
+        )
+        input_dim = fourier_channels + input_channels
 
         self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
-        self.to_dim = nn.Sequential(
-            nn.LayerNorm(gnn_embed_dim,), nn.Linear(gnn_embed_dim, queries_dim)
-        )
 
         get_cross_attn = lambda: PreNorm(
             latent_dim,
             Attention(
                 latent_dim,
-                queries_dim,
+                input_dim,
                 heads=cross_heads,
                 dim_head=cross_dim_head,
                 dropout=attn_dropout,
             ),
-            context_dim=queries_dim,
+            context_dim=input_dim,
         )
         get_cross_ff = lambda: PreNorm(
             latent_dim, FeedForward(latent_dim, dropout=ff_dropout)
@@ -234,10 +236,13 @@ class Perceiver(nn.Module):
 
             self_attns = nn.ModuleList([])
 
-            for _ in range(self_per_cross_attn):
+            for block_ind in range(self_per_cross_attn):
                 self_attns.append(
                     nn.ModuleList(
-                        [get_latent_attn(**cache_args), get_latent_ff(**cache_args)]
+                        [
+                            get_latent_attn(**cache_args, key=block_ind),
+                            get_latent_ff(**cache_args, key=block_ind),
+                        ]
                     )
                 )
 
@@ -251,50 +256,44 @@ class Perceiver(nn.Module):
                 )
             )
 
-        # for ogbg-code
-        if max_seq_len is not None:
-            self.graph_pred_linear_list = torch.nn.ModuleList()
-            for i in range(max_seq_len):
-                self.graph_pred_linear_list.append(
-                    torch.nn.Linear(latent_dim, num_classes)
-                )
-        else:
-
-            self.to_out = nn.Sequential(
-                nn.LayerNorm(latent_dim), nn.Linear(latent_dim, num_classes),
+        self.to_logits = (
+            nn.Sequential(
+                Reduce("b n d -> b d", "mean"),
+                nn.LayerNorm(latent_dim),
+                nn.Linear(latent_dim, num_classes),
             )
-
-        self.to_dim = nn.Sequential(
-            nn.LayerNorm(gnn_embed_dim,), nn.Linear(gnn_embed_dim, latent_dim)
+            if final_classifier_head
+            else nn.Identity()
         )
 
-        self.apply(lambda module: init_params(module, n_layers=depth))
+    def forward(self, data, mask=None, return_embeddings=False):
+        b, *axis, _, device, dtype = *data.shape, data.device, data.dtype
+        assert (
+            len(axis) == self.input_axis
+        ), "input data must have the right number of axis"
 
-    def forward(self, batch):
+        if self.fourier_encode_data:
+            # calculate fourier encoded positions in the range of [-1, 1], for all axis
 
-        gnn_output = self.gnn(batch)  # [n_nodes, gnn_embed_dim]
-        transformer_input = self.node_encoder(
-            batch.x
-        )  # [n_nodes, transformer_embed_dim]
+            axis_pos = list(
+                map(
+                    lambda size: torch.linspace(
+                        -1.0, 1.0, steps=size, device=device, dtype=dtype
+                    ),
+                    axis,
+                )
+            )
+            pos = torch.stack(torch.meshgrid(*axis_pos, indexing="ij"), dim=-1)
+            enc_pos = fourier_encode(pos, self.max_freq, self.num_freq_bands)
+            enc_pos = rearrange(enc_pos, "... n d -> ... (n d)")
+            enc_pos = repeat(enc_pos, "... -> b ...", b=b)
 
-        num_nodes = []
-        for i in range(len(batch.batch)):
-            mask = batch.batch.eq(i)
-            num_node = mask.sum()
-            num_nodes.append(num_node)
-        max_num_nodes = max(num_nodes)
+            data = torch.cat((data, enc_pos), dim=-1)
 
-        gnn_output, _ = to_dense_batch(
-            gnn_output, batch.batch, max_num_nodes=max_num_nodes
-        )
-        gnn_output = self.to_dim(gnn_output)
+        # concat to channels of data and flatten axis
 
-        ###>3000 for molecukes
-        data, mask = to_dense_batch(
-            transformer_input, batch.batch, max_num_nodes=max_num_nodes
-        )
+        data = rearrange(data, "b ... d -> b (...) d")
 
-        b = data.shape[0]
         x = repeat(self.latents, "n d -> b n d", b=b)
 
         # layers
@@ -307,14 +306,78 @@ class Perceiver(nn.Module):
                 x = self_attn(x) + x
                 x = self_ff(x) + x
 
-        if self.max_seq_len is None:  # not code2
+        # allow for fetching embeddings
 
-            out = x.mean(-2) + gnn_output.mean(-2)
-            out = self.to_out(out)
-            return out
+        if return_embeddings:
+            return x
+
+        # to logits
+
+        return self.to_logits(x)
+
+
+class GLABLayer(nn.Module):
+    def __init__(
+        self,
+        gnn_layer,
+        input_channels=3,
+        latent_dim=512,
+        cross_heads=1,
+        latent_heads=8,
+        cross_dim_head=64,
+        latent_dim_head=64,
+        attn_dropout=0.0,
+        ff_dropout=0.0,
+    ):
+
+        super().__init__()
+
+        self.gnn = gnn_layer
+        input_dim = input_channels
+
+        get_cross_attn = lambda: PreNorm(
+            latent_dim,
+            Attention(
+                latent_dim,
+                input_dim,
+                heads=cross_heads,
+                dim_head=cross_dim_head,
+                dropout=attn_dropout,
+            ),
+            context_dim=input_dim,
+        )
+        get_cross_ff = lambda: PreNorm(
+            latent_dim, FeedForward(latent_dim, dropout=ff_dropout)
+        )
+        get_latent_attn = lambda: PreNorm(
+            latent_dim,
+            Attention(
+                latent_dim,
+                heads=latent_heads,
+                dim_head=latent_dim_head,
+                dropout=attn_dropout,
+            ),
+        )
+        get_latent_ff = lambda: PreNorm(
+            latent_dim, FeedForward(latent_dim, dropout=ff_dropout)
+        )
+
+        self.latent_attn = get_latent_attn()
+        self.cross_attn = get_cross_attn()
+        self.cross_ff = get_cross_ff()
+        self.latent_ff = get_latent_ff()
+
+    def forward(self, latents, data, mask=None):
+        b = data.shape[0]
+
+        data = rearrange(data, "b ... d -> b (...) d")  # data should come from gnn
+
+        if len(latents.shape) < 3:
+            x = repeat(latents, "n d -> b n d", b=b)
         else:
-            pred_list = []
-            for i in range(self.max_seq_len):
-                pred_list.append(self.graph_pred_linear_list[i](x)[:, 0, :])
-
-            return pred_list
+            x = latents
+        x = self.cross_attn(x, context=data, mask=mask) + x
+        x = self.cross_ff(x) + x
+        x = self.latent_attn(x) + x
+        x = self.latent_ff(x) + x
+        return x

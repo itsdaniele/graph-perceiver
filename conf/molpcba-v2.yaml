@@ -1,6 +1,6 @@
 run:
   seed: 42
-  log: false
+  log: true
   dataset: "ogbg-molpcba"
   name: "test"
   test: true
@@ -22,14 +22,17 @@ model:
   ff_dropout: 0.2
   attn_dropout: 0.5
   gnn_dropout: 0.3
-  gnn_embed_dim: 300
+  gnn_embed_dim: 256
   queries_dim: 256
+  latent_heads: 4
+  cross_heads: 4
   num_gnn_layers: 4
-  num_latents: 16
+  num_latents: 8
   latent_dim: 256
   cross_dim_head: 64
   latent_dim_head: 64
   weight_tie_layers: false
+  self_per_cross_attn: 1
   loss_fn: "bce"
   gnn_type: "gin-virtual"
   lr: 0.0001

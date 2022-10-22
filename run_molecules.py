@@ -1,4 +1,4 @@
-from model.classifier import PerceiverClassifier
+from model.classifier import GLABClassifier, GLABClassifierV2
 
 from torch_geometric.loader import DataLoader
 from torch_geometric.datasets import ZINC
@@ -19,7 +19,7 @@ from util import log_hyperparameters
 import torch
 
 
-@hydra.main(config_path="conf", config_name="zinc")
+@hydra.main(config_path="conf", config_name="molpcba-v2")
 def main(cfg: DictConfig):
 
     batch_size = cfg.run.get("batch_size")
@@ -94,7 +94,7 @@ def main(cfg: DictConfig):
     else:
         raise ValueError()
 
-    model = PerceiverClassifier(
+    model = GLABClassifierV2(
         depth=cfg.model.depth,
         gnn_embed_dim=cfg.model.gnn_embed_dim,
         ff_dropout=cfg.model.ff_dropout,
