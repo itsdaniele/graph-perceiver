@@ -1,8 +1,8 @@
 run:
   seed: 42
-  log: true
-  dataset: "zinc"
-  name: "glab"
+  log: false
+  dataset: "pattern"
+  name: "test"
   test: true
   resume: false
   checkpoint_path: 
@@ -10,12 +10,12 @@ run:
 
 train:
   gpus: 1
-  epochs: 2000
+  epochs: 100
   num_workers: 32
 
 
 model:
-  depth: 3
+  depth: 10
   ff_dropout: 0.0
   attn_dropout: 0.5
   gnn_dropout: 0.0
@@ -30,9 +30,9 @@ model:
   cross_dim_head: 64
   latent_dim_head: 64
   weight_tie_layers: false
-  loss_fn: "l1"
-  gnn_type: "gin"
-  virtual_node: true
+  loss_fn: "weighted_cross_entropy"
+  gnn_type: "gcn"
+  virtual_node: false
   lr: 0.001
   
 
@@ -42,6 +42,6 @@ optim:
   weight_decay: 1e-5
   scheduler: cosine_with_warmup
   scheduler_params:
-    base_lr: 0.001
-    max_epoch: 2000
-    num_warmup_epochs: 50
+    base_lr: 0.0005
+    max_epoch: 100
+    num_warmup_epochs: 5

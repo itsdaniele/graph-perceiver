@@ -1,7 +1,7 @@
 import pytorch_lightning as pl
 import torch
 
-from util import get_linear_schedule_with_warmup
+from util import get_linear_schedule_with_warmup, accuracy_SBM
 
 
 class BaseLightning(pl.LightningModule):
@@ -59,6 +59,8 @@ class BaseLightning(pl.LightningModule):
             for i in range(len(y_hat)):
                 loss += self.loss_fn(y_hat[i].to(torch.float32), batch.y_arr[:, i])
             loss /= len(y_hat)
+        elif self.dataset == "pattern":
+            loss = self.loss_fn(y_hat, batch.y)
         else:
             raise ValueError(f"Dataset {self.dataset} not supported.")
 
@@ -88,6 +90,15 @@ class BaseLightning(pl.LightningModule):
 
             loss = self.loss_fn(y_hat.squeeze(-1), batch.y)
             return_dict = {"loss": loss}
+
+        elif self.dataset == "pattern":
+
+            loss = self.loss_fn(y_hat, batch.y)
+            return_dict = {
+                "loss": loss,
+                "y_pred": y_hat.detach().cpu(),
+                "y_true": batch.y.detach().cpu(),
+            }
 
         elif self.dataset == "ogbg-molpcba":
 
@@ -151,21 +162,33 @@ class BaseLightning(pl.LightningModule):
         elif self.dataset == "ogbg-molpcba":
             ap = self.calculate_metric(outputs)
             self.log("val/ap", ap, prog_bar=True)
+        elif self.dataset == "pattern":
+            self.log("val/acc", self.calculate_metric(outputs), prog_bar=False)
 
     def test_epoch_end(self, outputs):
         if self.dataset == "ogbg-molhiv":
             self.log("test/rocauc", self.calculate_metric(outputs), prog_bar=False)
         elif self.dataset == "ogbg-molpcba":
             self.log("test/ap", self.calculate_metric(outputs), prog_bar=False)
+        elif self.dataset == "pattern":
+            self.log("test/acc", self.calculate_metric(outputs), prog_bar=False)
 
     def calculate_metric(self, outputs):
         y_true = torch.cat([x["y_true"] for x in outputs], dim=0)
         y_pred = torch.cat([x["y_pred"] for x in outputs], dim=0)
-        result_dict = self.evaluator.eval({"y_true": y_true, "y_pred": y_pred})
-        if self.dataset == "ogbg-molhiv":
-            return result_dict["rocauc"]
-        elif self.dataset == "ogbg-molpcba":
-            return result_dict["ap"]
+
+        if "ogb" in self.dataset:
+            result_dict = self.evaluator.eval({"y_true": y_true, "y_pred": y_pred})
+            if self.dataset == "ogbg-molhiv":
+                return result_dict["rocauc"]
+            elif self.dataset == "ogbg-molpcba":
+                return result_dict["ap"]
+
+        elif self.dataset == "pattern":
+            acc = accuracy_SBM(y_true, y_pred)
+            return acc
+        else:
+            raise NotImplementedError()
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(

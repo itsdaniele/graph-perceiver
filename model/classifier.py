@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from .glab import GLAB
 from .gnn import GNN_node_Virtualnode, GNN_node
 from .modules import GCNConv
@@ -13,6 +14,7 @@ from .perceiver import GLABLayer
 
 from torch_geometric.utils import to_dense_batch
 from functools import partial
+from util import get_gnn, edge_encoder_cls_zero
 
 
 class GLABClassifier(BaseLightning):
@@ -42,6 +44,7 @@ class GLABClassifier(BaseLightning):
         weight_decay,
         scheduler,
         scheduler_params,
+        virtual_node,
         arr_to_seq=None,
         max_seq_len=None,
     ):
@@ -58,39 +61,14 @@ class GLABClassifier(BaseLightning):
 
         self.save_hyperparameters()
 
-        gnn = None
-        if dataset in ["ogbg-molhiv", "ogbg-molpcba"]:
-            if gnn_type == "gin-virtual":
-                gnn = GNN_node_Virtualnode(
-                    num_gnn_layers,
-                    gnn_embed_dim,
-                    AtomEncoder(gnn_embed_dim),
-                    BondEncoder,
-                    gnn_type="gin",
-                    drop_ratio=gnn_dropout,
-                )
-
-        elif dataset == "zinc":
-            if gnn_type == "gin-virtual":
-                gnn = GNN_node_Virtualnode(
-                    num_gnn_layers,
-                    gnn_embed_dim,
-                    AtomEncoder(gnn_embed_dim),
-                    partial(torch.nn.Embedding, 4),
-                    gnn_type="gin",
-                    drop_ratio=gnn_dropout,
-                )
-            elif gnn_type == "gcn-virtual":
-                gnn = GNN_node_Virtualnode(
-                    num_gnn_layers,
-                    gnn_embed_dim,
-                    AtomEncoder(gnn_embed_dim),
-                    partial(torch.nn.Embedding, 4),
-                    gnn_type="gcn",
-                    drop_ratio=gnn_dropout,
-                )
-        else:
-            raise NotImplementedError()
+        gnn = get_gnn(
+            gnn_embed_dim,
+            dataset,
+            gnn_type=gnn_type,
+            virtual_node=virtual_node,
+            depth=num_gnn_layers,
+            dropout=gnn_dropout,
+        )
 
         self.glab = GLAB(
             gnn_embed_dim=gnn_embed_dim,
@@ -122,6 +100,7 @@ class GLABClassifierV2(BaseLightning):
         num_classes,
         loss_fn,
         dataset,
+        num_gnn_layers,
         gnn_embed_dim,
         depth,
         num_latents,
@@ -138,6 +117,7 @@ class GLABClassifierV2(BaseLightning):
         weight_decay,
         scheduler,
         scheduler_params,
+        virtual_node,
         arr_to_seq=None,
         **kwargs
     ):
@@ -152,51 +132,34 @@ class GLABClassifierV2(BaseLightning):
             arr_to_seq=arr_to_seq,
         )
 
-        if dataset in ["ogbg-molhiv", "ogbg-molpcba"]:
-            if gnn_type == "gin-virtual":
-                self.gnn = GNN_node_Virtualnode(
-                    depth,
-                    gnn_embed_dim,
-                    AtomEncoder(gnn_embed_dim),
-                    BondEncoder,
-                    gnn_type="gin",
-                    drop_ratio=gnn_dropout,
-                )
+        self.gnn_dropout = gnn_dropout
+        self.gnn = get_gnn(
+            gnn_embed_dim,
+            dataset,
+            gnn_type=gnn_type,
+            virtual_node=virtual_node,
+            depth=num_gnn_layers,
+            dropout=gnn_dropout,
+        )
 
-        elif dataset == "zinc":
-            if gnn_type == "gin-virtual":
-                self.gnn = GNN_node_Virtualnode(
-                    depth,
-                    gnn_embed_dim,
-                    AtomEncoder(gnn_embed_dim),
-                    partial(torch.nn.Embedding, 4),
-                    gnn_type="gin",
-                    drop_ratio=gnn_dropout,
-                )
-            elif gnn_type == "gcn-virtual":
-                self.gnn = GNN_node_Virtualnode(
-                    depth,
-                    gnn_embed_dim,
-                    AtomEncoder(gnn_embed_dim),
-                    partial(torch.nn.Embedding, 4),
-                    gnn_type="gcn",
-                    drop_ratio=gnn_dropout,
-                )
-        else:
-            raise NotImplementedError()
+        self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
 
         self.layers = nn.ModuleList([])
 
         self.to_logits = nn.Sequential(
-            nn.Linear(gnn_embed_dim, gnn_embed_dim),
-            nn.Linear(gnn_embed_dim, num_classes),
+            nn.Linear(gnn_embed_dim, gnn_embed_dim * 2),
+            nn.Linear(gnn_embed_dim * 2, num_classes),
         )
-        self.to_gnn_dim = AtomEncoder(gnn_embed_dim)
 
         if dataset == "zinc":
             edge_encoder_cls = partial(nn.Embedding, 4)
+            self.to_gnn_dim = AtomEncoder(gnn_embed_dim)
         elif dataset == "ogbg-molpcba":
             edge_encoder_cls = BondEncoder
+            self.to_gnn_dim = AtomEncoder(gnn_embed_dim)
+        elif dataset == "pattern":
+            edge_encoder_cls = edge_encoder_cls_zero
+            self.to_gnn_dim = nn.Linear(3, gnn_embed_dim)
         else:
             raise NotImplementedError()
 
@@ -206,7 +169,6 @@ class GLABClassifierV2(BaseLightning):
             glab_layer = GLABLayer(
                 gnn_layer,
                 gnn_embed_dim,
-                num_latents=num_latents,
                 latent_dim=latent_dim,
                 cross_heads=cross_heads,
                 latent_heads=latent_heads,
@@ -217,6 +179,10 @@ class GLABClassifierV2(BaseLightning):
             )
 
             self.layers.append(nn.ModuleList([gnn_layer, glab_layer]))
+
+        self.norm1 = nn.BatchNorm1d(gnn_embed_dim)
+        self.norm2 = nn.BatchNorm1d(gnn_embed_dim)
+        self.norm3 = nn.BatchNorm1d(gnn_embed_dim)
 
         self.save_hyperparameters()
 
@@ -235,12 +201,13 @@ class GLABClassifierV2(BaseLightning):
         max_num_nodes = max(num_nodes)
 
         local_out, _ = to_dense_batch(x, batch.batch, max_num_nodes=max_num_nodes)
-        latents = None
+
         for i, (gnn_layer, glab_layer) in enumerate(self.layers):
             x = gnn_layer(x, batch.edge_index, batch.edge_attr)
-
+            x = F.dropout(x, self.gnn_dropout)
             x_, mask = to_dense_batch(x, batch.batch, max_num_nodes=max_num_nodes)
-            latents = glab_layer(x_, latents=latents)
+
+            latents = glab_layer(self.latents if i == 0 else latents, x_)
 
         return self.to_logits(latents.mean(-2) + local_out.mean(-2))
 

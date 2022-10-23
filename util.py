@@ -7,9 +7,138 @@ from pytorch_lightning.utilities import rank_zero_only
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import torch.optim as optim
 
 from scipy.stats import entropy
+
+from model.gnn import GNN_node_Virtualnode, GNN_node
+from ogb.graphproppred.mol_encoder import AtomEncoder, BondEncoder
+
+from functools import partial
+
+from sklearn.metrics import confusion_matrix
+
+
+def accuracy_SBM(targets, pred_int):
+    """Accuracy eval for Benchmarking GNN's PATTERN and CLUSTER datasets.
+    https://github.com/graphdeeplearning/benchmarking-gnns/blob/master/train/metrics.py#L34
+    """
+    S = targets
+    C = pred_int
+    CM = confusion_matrix(S, C).astype(np.float32)
+    nb_classes = CM.shape[0]
+    targets = targets.cpu().detach().numpy()
+    nb_non_empty_classes = 0
+    pr_classes = np.zeros(nb_classes)
+    for r in range(nb_classes):
+        cluster = np.where(targets == r)[0]
+        if cluster.shape[0] != 0:
+            pr_classes[r] = CM[r, r] / float(cluster.shape[0])
+            if CM[r, r] > 0:
+                nb_non_empty_classes += 1
+        else:
+            pr_classes[r] = 0.0
+    acc = np.sum(pr_classes) / float(nb_classes)
+    return acc
+
+
+def weighted_cross_entropy(pred, true):
+    """Weighted cross-entropy for unbalanced classes.
+    """
+
+    # calculating label weights for weighted loss computation
+    V = true.size(0)
+    n_classes = pred.shape[1] if pred.ndim > 1 else 2
+    label_count = torch.bincount(true)
+    label_count = label_count[label_count.nonzero(as_tuple=True)].squeeze()
+    cluster_sizes = torch.zeros(n_classes, device=pred.device).long()
+    cluster_sizes[torch.unique(true)] = label_count
+    weight = (V - cluster_sizes).float() / V
+    weight *= (cluster_sizes > 0).float()
+    # multiclass
+    if pred.ndim > 1:
+        pred = F.log_softmax(pred, dim=-1)
+        return F.nll_loss(pred, true, weight=weight), pred
+    # binary
+    else:
+        loss = F.binary_cross_entropy_with_logits(
+            pred, true.float(), weight=weight[true]
+        )
+        return loss, torch.sigmoid(pred)
+
+
+def edge_encoder_cls_zero(_):
+    def zero(_):
+        return 0
+
+    return zero
+
+
+def get_gnn(dim, dataset, gnn_type="gcn", virtual_node=False, depth=3, dropout=0.0):
+
+    assert gnn_type in ["gcn", "gin"]
+    if dataset in ["ogbg-molhiv", "ogbg-molpcba"]:
+        if virtual_node:
+            gnn = GNN_node_Virtualnode(
+                depth,
+                dim,
+                AtomEncoder(dim),
+                BondEncoder,
+                gnn_type=gnn_type,
+                drop_ratio=dropout,
+            )
+        else:
+            gnn = GNN_node(
+                depth,
+                dim,
+                AtomEncoder(dim),
+                BondEncoder,
+                gnn_type=gnn_type,
+                drop_ratio=dropout,
+            )
+
+    elif dataset == "zinc":
+        if virtual_node:
+            gnn = GNN_node_Virtualnode(
+                depth,
+                dim,
+                AtomEncoder(dim),
+                partial(torch.nn.Embedding, 4),
+                gnn_type=gnn_type,
+                drop_ratio=dropout,
+            )
+        else:
+            gnn = GNN_node(
+                depth,
+                dim,
+                AtomEncoder(dim),
+                partial(torch.nn.Embedding, 4),
+                gnn_type=gnn_type,
+                drop_ratio=dropout,
+            )
+    elif dataset == "pattern":
+        if virtual_node:
+            gnn = GNN_node_Virtualnode(
+                depth,
+                dim,
+                torch.nn.Linear(3, dim),
+                edge_encoder_cls_zero,
+                gnn_type=gnn_type,
+                drop_ratio=dropout,
+            )
+        else:
+            gnn = GNN_node(
+                depth,
+                dim,
+                torch.nn.Linear(3, dim),
+                edge_encoder_cls_zero,
+                gnn_type=gnn_type,
+                drop_ratio=dropout,
+            )
+    else:
+        raise NotImplementedError()
+    return gnn
 
 
 def get_linear_schedule_with_warmup(

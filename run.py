@@ -1,7 +1,7 @@
 from model.classifier import GLABClassifier, GLABClassifierV2
 
 from torch_geometric.loader import DataLoader
-from torch_geometric.datasets import ZINC
+from torch_geometric.datasets import ZINC, GNNBenchmarkDataset
 
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
@@ -14,7 +14,7 @@ from hydra.utils import get_original_cwd
 from omegaconf import DictConfig
 import os
 
-from util import log_hyperparameters
+from util import log_hyperparameters, weighted_cross_entropy
 
 import torch
 
@@ -85,12 +85,54 @@ def main(cfg: DictConfig):
             shuffle=False,
         )
 
+    if cfg.run.dataset == "pattern":
+
+        num_tasks = 2
+        evaluator = None
+        dataset_train = GNNBenchmarkDataset(
+            root=os.path.join(get_original_cwd(), "./data"),
+            name="PATTERN",
+            split="train",
+        )
+        dataset_val = GNNBenchmarkDataset(
+            root=os.path.join(get_original_cwd(), "./data"),
+            name="PATTERN",
+            split="val",
+        )
+
+        dataset_test = GNNBenchmarkDataset(
+            root=os.path.join(get_original_cwd(), "./data"),
+            name="PATTERN",
+            split="test",
+        )
+
+        train_loader = DataLoader(
+            dataset_train,
+            batch_size=batch_size or cfg.run.batch_size_train,
+            shuffle=True,
+            num_workers=cfg.train.num_workers,
+        )
+        valid_loader = DataLoader(
+            dataset_val,
+            batch_size=batch_size or cfg.run.batch_size_val,
+            shuffle=False,
+            num_workers=cfg.train.num_workers,
+        )
+        test_loader = DataLoader(
+            dataset_test,
+            batch_size=batch_size or cfg.run.batch_size_test,
+            shuffle=False,
+            num_workers=cfg.train.num_workers,
+        )
+
     lr_monitor = LearningRateMonitor(logging_interval="step")
 
     if cfg.model.loss_fn == "bce":
         loss_fn = torch.nn.BCEWithLogitsLoss()
     elif cfg.model.loss_fn == "l1":
         loss_fn = torch.nn.L1Loss()
+    elif cfg.model.loss_fn == "weighted_cross_entropy":
+        loss_fn = weighted_cross_entropy
     else:
         raise ValueError()
 
@@ -119,6 +161,7 @@ def main(cfg: DictConfig):
         weight_decay=cfg.optim.weight_decay,
         scheduler=cfg.optim.scheduler,
         scheduler_params=cfg.optim.scheduler_params,
+        virtual_node=cfg.model.virtual_node,
     )
 
     logger = None
@@ -136,6 +179,9 @@ def main(cfg: DictConfig):
     elif cfg.run.dataset == "zinc":
         monitor = "val/loss"
         mode = "min"
+    elif cfg.run.dataset == "pattern":
+        monitor = "val/acc"
+        mode = "max"
 
     checkpoint_callback = ModelCheckpoint(
         monitor=monitor,

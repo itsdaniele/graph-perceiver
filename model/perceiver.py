@@ -321,7 +321,6 @@ class GLABLayer(nn.Module):
         self,
         gnn_layer,
         input_channels=3,
-        num_latents=8,
         latent_dim=512,
         cross_heads=1,
         latent_heads=8,
@@ -332,8 +331,6 @@ class GLABLayer(nn.Module):
     ):
 
         super().__init__()
-
-        self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
 
         self.gnn = gnn_layer
         input_dim = input_channels
@@ -370,16 +367,17 @@ class GLABLayer(nn.Module):
         self.cross_ff = get_cross_ff()
         self.latent_ff = get_latent_ff()
 
-    def forward(self, data, latents=None, mask=None):
+    def forward(self, latents, data, mask=None):
         b = data.shape[0]
 
         data = rearrange(data, "b ... d -> b (...) d")  # data should come from gnn
 
-        x = repeat(self.latents, "n d -> b n d", b=b)
+        if len(latents.shape) < 3:
+            x = repeat(latents, "n d -> b n d", b=b)
+        else:
+            x = latents
         x = self.cross_attn(x, context=data, mask=mask) + x
         x = self.cross_ff(x) + x
         x = self.latent_attn(x) + x
         x = self.latent_ff(x) + x
-
-
-        return (x + latents) if latents is not None else x
+        return x
