@@ -1,8 +1,8 @@
 run:
   seed: 42
-  log: true
+  log: false
   dataset: "zinc"
-  name: "glab"
+  name: "lappe"
   test: true
   resume: false
   checkpoint_path: 

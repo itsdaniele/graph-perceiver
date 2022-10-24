@@ -1,13 +1,11 @@
 run:
-
-  name: "bigger"
+  name: "test"
   seed: 42
   log: true
   dataset: "ogbg-molhiv"
   test: true
   resume: false
   checkpoint_path: 
-
   batch_size: 128
 
 train:
@@ -16,7 +14,6 @@ train:
   num_workers: 32
 
 model:
-  input_channels: 64
   depth: 4
   attn_dropout: 0.5
   ff_dropout: 0.5
@@ -24,14 +21,26 @@ model:
   weight_tie_layers: false
   virtual_latent: true
   gnn_embed_dim: 256
-  queries_dim: 256
+  queries_dim: 256  
   num_latents: 12
-  latent_dim: 200
+  latent_dim: 256
   cross_heads: 8
   latent_heads: 8
   cross_dim_head: 8
   latent_dim_head: 8
   loss_fn: "bce"
-  gnn_type: "gin-virtual"
+  gnn_type: "gin"
+  virtual_node: true
+  self_per_cross_attn: 1
+  num_gnn_layers: 4
   lr: 0.0001
   
+optim:
+  batch_accumulation: 1
+  clip_grad_norm: True
+  weight_decay: 1e-5
+  scheduler: cosine_with_warmup
+  scheduler_params:
+    max_epoch: 100
+    base_lr: 0.0001
+    num_warmup_epochs: 5

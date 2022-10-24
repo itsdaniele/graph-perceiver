@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .glab import GLAB
 from .gnn import GNN_node_Virtualnode, GNN_node
-from .modules import GCNConv
+from .modules import GCNConv, LapPENodeEncoder
 
 from functools import partial
 
@@ -154,7 +154,7 @@ class GLABClassifierV2(BaseLightning):
         if dataset == "zinc":
             edge_encoder_cls = partial(nn.Embedding, 4)
             self.to_gnn_dim = AtomEncoder(gnn_embed_dim)
-        elif dataset == "ogbg-molpcba":
+        elif dataset in ["ogbg-molpcba", "ogbg-molhiv"]:
             edge_encoder_cls = BondEncoder
             self.to_gnn_dim = AtomEncoder(gnn_embed_dim)
         elif dataset == "pattern":
@@ -162,6 +162,19 @@ class GLABClassifierV2(BaseLightning):
             self.to_gnn_dim = nn.Linear(3, gnn_embed_dim)
         else:
             raise NotImplementedError()
+
+        # self.pos_encoder = LapPENodeEncoder(
+        #     gnn_embed_dim,
+        #     8,
+        #     model_type="DeepSet",
+        #     n_layers=2,
+        #     n_heads=None,
+        #     dim_emb=gnn_embed_dim,
+        #     pass_as_var=False,
+        #     post_n_layers=1,
+        #     max_freqs=8,
+        #     raw_norm_type="batchnorm",
+        # )
 
         for _ in range(depth):
 
@@ -190,7 +203,7 @@ class GLABClassifierV2(BaseLightning):
         self, batch,
     ):
 
-        local_out = self.gnn(batch)
+        # local_out = self.gnn(batch)
         x = self.to_gnn_dim(batch.x)
 
         num_nodes = []
@@ -200,7 +213,7 @@ class GLABClassifierV2(BaseLightning):
             num_nodes.append(num_node)
         max_num_nodes = max(num_nodes)
 
-        local_out, _ = to_dense_batch(x, batch.batch, max_num_nodes=max_num_nodes)
+        # local_out, _ = to_dense_batch(x, batch.batch, max_num_nodes=max_num_nodes)
 
         for i, (gnn_layer, glab_layer) in enumerate(self.layers):
             x = gnn_layer(x, batch.edge_index, batch.edge_attr)
@@ -209,5 +222,5 @@ class GLABClassifierV2(BaseLightning):
 
             latents = glab_layer(self.latents if i == 0 else latents, x_)
 
-        return self.to_logits(latents.mean(-2) + local_out.mean(-2))
+        return self.to_logits(latents.mean(-2))
 

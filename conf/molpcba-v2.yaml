@@ -34,7 +34,8 @@ model:
   weight_tie_layers: false
   self_per_cross_attn: 1
   loss_fn: "bce"
-  gnn_type: "gin-virtual"
+  gnn_type: "gin"
+  virtual_node: false
   lr: 0.0001
   
 
